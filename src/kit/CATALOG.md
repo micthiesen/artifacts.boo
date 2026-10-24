@@ -39,6 +39,8 @@ Diagrams (Mermaid; the only way to draw anything that isn't a `Chart`)
   - Others work too when they fit better: `journey`, `gitGraph`, `C4Context`, `block`, `packet`, `requirementDiagram`, `radar-beta`, `treemap-beta`, `venn-beta`, `swimlane-beta`, `treeView-beta`, `ishikawa-beta` and more.
 - `Chart` vs Mermaid: line, bar, area and pie charts of numbers always use `Chart` with a data file (Mermaid `pie` and `xychart` are rejected). Everything above uses Mermaid.
 - Keep labels short (2-4 words) and diagrams under ~25 nodes; split bigger ones by section. Let the theme supply colors: no `style`, `classDef` colors, `%%{init}%%` or `theme:` config. Never hand-draw with SVG, positioned divs or ASCII art.
+- To show what a change does to a flow, mark flowchart nodes `:::added`, `:::changed` or `:::removed` (the kit's own classes, no `classDef`): they get a sign and an outline, and readers can switch between Before, Both and After. `Diagram({focus: "A B"})` lights those node ids and fades the rest.
+- A few changed lines of code: a ```` ```diff ```` fence, or `Diff({code, file?})` in TSX. Lines start with `+`, `-` or a space, as `git diff` prints them.
 
 Primitives
 - `Button({variant?: default|secondary|outline|ghost|destructive|link, size?: sm|default|lg|icon|icon-sm})`

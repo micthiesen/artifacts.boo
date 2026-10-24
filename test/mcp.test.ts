@@ -221,3 +221,16 @@ test("share rejects malformed entries with a message, not a crash", async () => 
   expect((await call(MIA, "artifact_share", { id, add: [{ email: "nope", role: "view" }] })).text).toContain("@domain or workspace");
   expect((await call(MIA, "artifact_share", { id, add: [{ email: OLU, role: "admin" }] })).text).toContain("role must be view or edit");
 });
+
+test("artifact_guide serves a topic's recipe on its own and refuses unknown topics", async () => {
+  const general = await call(MIA, "artifact_guide", {});
+  expect(general.text).toContain("Special kinds");
+  const change = await call(MIA, "artifact_guide", { topic: "change" });
+  expect(change.text).toContain("Change guides");
+  expect(change.text).not.toContain("Artifact kit reference");
+  expect((await call(MIA, "artifact_guide", { topic: "nope" })).error).toBe(true);
+});
+
+test("artifact_guide topics are only its own keys", async () => {
+  expect((await call(MIA, "artifact_guide", { topic: "constructor" })).error).toBe(true);
+});

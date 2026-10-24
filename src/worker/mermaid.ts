@@ -1,7 +1,7 @@
 // ```mermaid fences in MDX/Markdown become <Diagram code="…"/>, and their
 // syntax is checked at write time so agents get Pele's error with a line
 // number in the tool result instead of a broken block for viewers.
-import { detectType, load, parse, PeleError } from "pele/lazy";
+import { detectType, load, parse, PeleError, renderAsync } from "pele/lazy";
 import type { CompileError } from "./compile.ts";
 
 export type MermaidBlock = { code: string; line: number };
@@ -64,4 +64,25 @@ export async function checkMermaid(path: string, blocks: MermaidBlock[]): Promis
     }
   }
   return errors;
+}
+
+/** A diagram's node ids, from Pele's parse, for checking what a ChangeGuide step's `focus` names. Undefined if unknown. */
+export async function mermaidNodeIds(code: string): Promise<Set<string> | undefined> {
+  try {
+    await load(detectType(code));
+    const model = parse(code) as { nodes?: Map<string, unknown> | unknown[] };
+    if (model.nodes instanceof Map) return new Set(model.nodes.keys());
+  } catch {
+    // checkMermaid reports syntax errors.
+  }
+  return undefined;
+}
+
+/** The width a diagram renders at, in px, before it is scaled to fit its card. Undefined if it can't be rendered. */
+export async function mermaidWidth(code: string): Promise<number | undefined> {
+  try {
+    return (await renderAsync(code, { links: false, images: false })).width;
+  } catch {
+    return undefined;
+  }
 }

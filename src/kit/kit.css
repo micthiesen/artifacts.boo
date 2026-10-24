@@ -140,6 +140,67 @@
   display: block;
   width: 100%;
 }
+/* "What changed" diagrams: nodes marked :::added, :::changed or :::removed get a coloured outline whose line
+   style and the sign drawn into their label (diagram-impl.tsx) carry the meaning without colour. Edges into a
+   new or removed node follow it. Before / After hide what doesn't exist on that side; only the reader's switch
+   fades them (data-switched), never the first paint. */
+.art-diagram .pele-node:is(.added, .changed, .removed) > :is(rect, polygon, path, circle, ellipse) {
+  stroke-width: 2px;
+}
+.art-diagram .pele-node.added > :is(rect, polygon, path, circle, ellipse) {
+  stroke: var(--positive) !important;
+}
+.art-diagram .pele-node.changed > :is(rect, polygon, path, circle, ellipse) {
+  stroke: var(--caution) !important;
+  stroke-dasharray: 2 3;
+}
+.art-diagram .pele-node.removed > :is(rect, polygon, path, circle, ellipse) {
+  stroke: var(--negative) !important;
+  stroke-dasharray: 6 4;
+}
+.art-diagram .pele-edge.added {
+  stroke: var(--positive);
+}
+.art-diagram .pele-edge.removed {
+  stroke: var(--negative);
+  stroke-dasharray: 6 4;
+}
+.art-diagram .art-sign {
+  font-weight: 700;
+}
+.art-diagram .added .art-sign {
+  fill: var(--positive);
+}
+.art-diagram .changed .art-sign {
+  fill: var(--caution);
+}
+.art-diagram .removed .art-sign {
+  fill: var(--negative);
+}
+.art-diagram :is(.pele-node, .pele-edge, .pele-edge-label) {
+  transition: none;
+}
+/* Visibility goes with the fade, so a screen reader doesn't read what that side doesn't have. */
+.art-diagram[data-switched] :is(.pele-node, .pele-edge, .pele-edge-label) {
+  transition:
+    opacity var(--motion-base) var(--motion-ease),
+    visibility var(--motion-base);
+}
+.art-diagram[data-show="before"] :is(.pele-node, .pele-edge, .pele-edge-label).added,
+.art-diagram[data-show="after"] :is(.pele-node, .pele-edge, .pele-edge-label).removed {
+  opacity: 0;
+  visibility: hidden;
+}
+/* A focus fades the rest back; labels stay muted-foreground, so they remain readable. */
+.art-diagram .pele-node.art-dim > :not(text) {
+  opacity: 0.35;
+}
+.art-diagram .pele-node.art-dim text {
+  fill: var(--muted-foreground);
+}
+.art-diagram :is(.pele-edge, .pele-edge-label).art-dim {
+  opacity: 0.35;
+}
 /* Diagrams narrower than the card sit centered in it. */
 .art-diagram svg.pele {
   display: block;

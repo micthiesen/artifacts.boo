@@ -4,8 +4,22 @@ import { assetUrl, linkTitle } from "../store.ts";
 import { Contents, TaskCheckbox } from "./page-extras.tsx";
 import * as React from "react";
 import { cn } from "./utils.ts";
+import { Diff } from "./diff.tsx";
 
 type P<T extends keyof React.JSX.IntrinsicElements> = React.ComponentProps<T>;
+
+/** A fenced code block. */
+function PlainPre({ className, ...p }: P<"pre">) {
+  return (
+    <pre
+      className={cn(
+        "my-6 overflow-x-auto rounded-lg border border-border bg-black/25 px-4 py-3.5 font-mono text-[13px] leading-relaxed text-foreground/[0.92] [&_code]:border-0 [&_code]:bg-transparent [&_code]:p-0 [&_code]:text-[inherit] [&_code]:break-normal",
+        className,
+      )}
+      {...p}
+    />
+  );
+}
 
 /**
  * A markdown table. On phones, one with more than three columns reads as cards, like a Table: each cell is
@@ -88,15 +102,12 @@ export const markdownComponents = {
   code: ({ className, ...p }: P<"code">) => (
     <code className={cn("rounded-[5px] border border-border bg-muted px-[0.35em] py-[0.1em] font-mono text-[0.86em] break-words text-foreground", className)} {...p} />
   ),
-  pre: ({ className, ...p }: P<"pre">) => (
-    <pre
-      className={cn(
-        "my-6 overflow-x-auto rounded-lg border border-border bg-black/25 px-4 py-3.5 font-mono text-[13px] leading-relaxed text-foreground/[0.92] [&_code]:border-0 [&_code]:bg-transparent [&_code]:p-0 [&_code]:text-[inherit] [&_code]:break-normal",
-        className,
-      )}
-      {...p}
-    />
-  ),
+  pre: ({ className, ...p }: P<"pre">) => {
+    // A ```diff fence: signed, tinted lines.
+    const code = React.isValidElement<{ className?: string; children?: React.ReactNode }>(p.children) ? p.children.props : null;
+    if (code && /\blanguage-diff\b/.test(code.className ?? "")) return <Diff>{code.children}</Diff>;
+    return <PlainPre className={className} {...p} />;
+  },
   table: (p: P<"table">) => <MarkdownTable {...p} />,
   thead: ({ className, ...p }: P<"thead">) => <thead className={cn("border-b border-border bg-muted/50", className)} {...p} />,
   tbody: ({ className, ...p }: P<"tbody">) => <tbody className={className} {...p} />,

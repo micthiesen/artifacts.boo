@@ -12,7 +12,8 @@ import kitThemeCss from "../kit/theme.css";
 import type { JsonValue } from "../shared/protocol.ts";
 import kitExports from "./kit-exports.json";
 import { remarkBlockIds, type BlockInfo } from "./blocks.ts";
-import { checkMermaid, remarkMermaid, type MermaidBlock } from "./mermaid.ts";
+import { checkMermaid, mermaidNodeIds, mermaidWidth, remarkMermaid, type MermaidBlock } from "./mermaid.ts";
+import { checkChangeGuide } from "../shared/change-guide.ts";
 
 export const ALLOWED_IMPORTS = new Set([
   "react",
@@ -329,6 +330,7 @@ export async function buildArtifact(files: Record<string, string>): Promise<{ bu
     const code = await rewriteRelativeImports(path, result.module.code, pathSet);
     imports[ART_PREFIX + path] = `data:text/javascript;base64,${toBase64(code)}`;
   }
+  errors.push(...(await changeGuideErrors(files, data)));
   if (errors.length) return { errors };
 
   let css: string;
@@ -340,6 +342,56 @@ export async function buildArtifact(files: Record<string, string>): Promise<{ bu
   const code = Object.fromEntries(paths.filter((p) => !p.startsWith("data/")).map((p) => [p, files[p]]));
   const warnings = [...phoneWidthWarnings(candidates, code), ...dataWarnings(code, data)];
   return { build: { entry: ART_PREFIX + entries[0], imports, css, data, blocks, stamp: BUILD_STAMP }, errors: [], ...(warnings.length ? { warnings } : {}) };
+}
+
+/**
+ * A <ChangeGuide> whose data skips a changed file, points at a missing step or lights a node its picture lacks
+ * would mislead the reader, so it isn't saved. Its picture is checked like any ```mermaid fence.
+ */
+/** As the kit resolves a component's `data` prop: "./x.json", "x.json" and "data/x.json" are the same file. */
+function dataPath(name: string): string {
+  const p = name.trim().replace(/^\.?\//, "");
+  return p.startsWith("data/") ? p : `data/${p}`;
+}
+
+/** A guide's map is scaled to a phone's column (about 320 px); past this its 16 px labels drop under 10 px. */
+const GUIDE_MAP_MAX_PX = 520;
+
+async function changeGuideErrors(files: Record<string, string>, data: Record<string, JsonValue>): Promise<CompileError[]> {
+  const errors: CompileError[] = [];
+  const named = new Set<string>();
+  for (const [path, source] of Object.entries(files)) {
+    if (!/\.(mdx|tsx|jsx)$/.test(path)) continue;
+    // Code samples that mention <ChangeGuide> (in fences or backticks) aren't uses of it.
+    const code = path.endsWith(".mdx") ? source.replace(/^(```|~~~)[\s\S]*?^\1/gm, "").replace(/`[^`\n]*`/g, "") : source;
+    for (const m of code.matchAll(/<ChangeGuide\b([^>]*)>/g)) {
+      const name = /\bdata=\{?\s*["']([^"']+)["']/.exec(m[1])?.[1] ?? (/\bdata=/.test(m[1]) ? null : "guide.json");
+      if (name) named.add(dataPath(name));
+    }
+  }
+  for (const path of named) {
+    if (!(path in data)) {
+      errors.push({ path, message: `<ChangeGuide> reads ${path}, which doesn't exist: add it (see artifact_guide topic "change")` });
+      continue;
+    }
+    const guide = data[path] as { map?: unknown } | null;
+    const map = typeof guide?.map === "string" ? guide.map : null;
+    if (map) {
+      const bad = await checkMermaid(path, [{ code: map, line: 0 }]);
+      if (bad.length) {
+        errors.push(...bad.map((e) => ({ path, message: `"map": ${e.message}` })));
+        continue;
+      }
+      // Readers are on phones: a wide picture shrinks its labels below what anyone can read there.
+      if (!/^\s*flowchart\s+(TD|TB)\b/.test(map)) errors.push({ path, message: `"map" is a top-down flowchart: start it with \`flowchart TD\`` });
+      const width = await mermaidWidth(map);
+      if (width && width > GUIDE_MAP_MAX_PX) {
+        errors.push({ path, message: `"map" draws ${Math.round(width)} px wide; on a phone its labels would shrink below 10 px. Keep it under ${GUIDE_MAP_MAX_PX}: at most 2 nodes side by side, labels of 2 to 4 words` });
+      }
+    }
+    for (const message of checkChangeGuide(guide, map ? await mermaidNodeIds(map) : undefined)) errors.push({ path, message });
+  }
+  return errors;
 }
 
 /**

@@ -35,3 +35,20 @@ stateDiagram-v2
   Shared --> Archived
   Archived --> [*]
 ```
+
+## What changed
+
+```mermaid
+flowchart LR
+  Req([Request]) --> Old[Session cookie]:::removed
+  Req --> New[Signed token]:::added
+  Old --> App[Handler]
+  New --> App
+  App --> Log[Audit log]:::changed
+```
+
+```diff
+-  session: cookie,
++  session: signedToken(user),
+   audit: true,
+```

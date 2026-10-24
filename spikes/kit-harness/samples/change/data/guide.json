@@ -1,0 +1,111 @@
+{
+ "url": "https://github.com/micthiesen/artifacts.boo/commit/d73de903195d97c8299e3b1915418b8f15171095",
+ "head": "d73de90",
+ "outcome": "When Listen reads on an iPhone, the wisp should now scroll with the words instead of jittering behind them.",
+ "where": "Any artifact page › Listen (reads the page aloud) › the wisp, the small light that follows the words",
+ "risk": "medium",
+ "revert": "Safe",
+ "ask": {
+  "kind": "try",
+  "text": "The fix is for something you see, and nobody has watched it yet.",
+  "steps": [
+   "Open any artifact on an iPhone and press Listen.",
+   "Scroll while it reads: the light should stay on the word.",
+   "Turn Follow off and scroll away: the light waits at the screen's edge, then rejoins the words.",
+   "Open the splash page: its wisp should still hide behind the cards."
+  ]
+ },
+ "before": "A full-screen canvas that a script redrew after every scroll. iOS runs that script late, so the wisp lagged.",
+ "after": "A small canvas on the page. The browser scrolls it with the text, so it never waits for the script.",
+ "map": "flowchart TD\n  S([Page scrolls]) --> H[Script redraws]:::removed\n  H --> R[Full-screen canvas]:::removed\n  S --> C[Browser moves canvas]:::added\n  M([Wisp moves]) --> F[Fit canvas to wisp]:::added\n  F --> C\n  R --> V([Screen])\n  C --> V",
+ "lookHere": [
+  {
+   "q": "Could the canvas ever make a phone page scroll sideways?",
+   "stop": 2
+  },
+  {
+   "q": "Is it fine that the splash page wisp changed too?",
+   "stop": 3
+  }
+ ],
+ "stops": [
+  {
+   "title": "The canvas shrinks to fit the wisp",
+   "why": "It used to cover the whole screen. Now it is a small box placed on the page, on artifact pages and on the splash page.",
+   "files": [
+    "src/kit/kit.css",
+    "src/shell/shell.css"
+   ],
+   "diff": {
+    "file": "src/kit/kit.css",
+    "lines": "-  position: fixed;\n-  inset: 0;\n+  position: absolute;\n+  top: 0;\n+  left: 0;\n   z-index: 30;\n-  width: 100%;\n-  height: 100%;"
+   }
+  },
+  {
+   "title": "It is sized and placed as it moves",
+   "why": "Each time the wisp moves, the box grows if needed and is moved under it. It never reaches past what's on screen, so the page can't get longer or wider. The motion test now lets the box resize, but still not move by position.",
+   "files": [
+    "src/shared/wisp-body.ts",
+    "test/motion.test.ts"
+   ],
+   "focus": "M F C"
+  },
+  {
+   "title": "Scrolling no longer waits for the script",
+   "why": "The page still tells the wisp it scrolled, but the browser has already moved it with the text, so nothing lags. Only while it waits at the screen's edge is it pinned to the screen instead.",
+   "files": [
+    "src/kit/wisp.ts",
+    "src/shell/splash-wisp.ts"
+   ],
+   "focus": "S H C"
+  }
+ ],
+ "proof": [
+  {
+   "check": "bun test test/motion.test.ts",
+   "ran": true,
+   "exit": 0,
+   "head": "cb69182"
+  },
+  {
+   "check": "Watched on an iPhone while Listen reads",
+   "ran": false
+  },
+  {
+   "check": "Phone overflow check (spikes/e2e-layout.ts)",
+   "ran": false
+  }
+ ],
+ "files": [
+  {
+   "path": "src/kit/kit.css",
+   "add": 5,
+   "del": 5
+  },
+  {
+   "path": "src/kit/wisp.ts",
+   "add": 2,
+   "del": 1
+  },
+  {
+   "path": "src/shared/wisp-body.ts",
+   "add": 79,
+   "del": 15
+  },
+  {
+   "path": "src/shell/shell.css",
+   "add": 3,
+   "del": 2
+  },
+  {
+   "path": "src/shell/splash-wisp.ts",
+   "add": 2,
+   "del": 1
+  },
+  {
+   "path": "test/motion.test.ts",
+   "add": 3,
+   "del": 2
+  }
+ ]
+}
