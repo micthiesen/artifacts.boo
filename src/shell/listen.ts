@@ -11,14 +11,12 @@
 import type { ShellMessage, SpeakUnit } from "../shared/protocol.ts";
 import { motionMs } from "../shared/motion.ts";
 import type { FromWorker, TimedWord, ToWorker } from "../tts/types.ts";
-import { splitSentences, takeUnits, type Sentence } from "./listen-text.ts";
+import { aheadEnd, splitSentences, takeUnits, type Sentence } from "./listen-text.ts";
 
 /** Playback rates on top of the voice's own pace (Listen's 1× is already a little brisk). */
 const RATES = [0.75, 0.9, 1, 1.25, 1.5, 1.75, 2];
 const RATE_KEY = "art:listen:rate";
 const HINT_KEY = "art:listen:hinted";
-/** Sentences made ahead of the one playing. */
-const AHEAD = 2;
 /**
  * Words are passed to the wisp this far ahead of being heard (seconds of real time), so its hop lands as each
  * begins; never more than half the word it's on, so it never leaves a word before it's spoken.
@@ -196,7 +194,7 @@ export function createListen(opts: { title: string; apex: string; post: (msg: Sh
   let notice = "";
   let noticeTimer = 0;
   let unlockUrl = "";
-  const made = new Map<number, { id: number; result: Promise<Made> }>();
+  const made = new Map<number, { id: number; result: Promise<Made>; done: boolean }>();
   const waiting = new Map<number, { resolve: (m: Made) => void; reject: (e: Error) => void }>();
 
   const busy = () => state === "loading" || state === "collecting" || state === "buffering";
@@ -396,12 +394,20 @@ export function createListen(opts: { title: string; apex: string; post: (msg: Sh
     if (!entry) {
       const id = nextId++;
       const result = new Promise<Made>((resolve, reject) => waiting.set(id, { resolve, reject }));
-      result.catch(() => made.get(i)?.id === id && made.delete(i));
-      entry = { id, result };
+      const fresh = { id, result, done: false };
+      result.then(() => (fresh.done = true), () => made.get(i)?.id === id && made.delete(i));
+      entry = fresh;
       made.set(i, entry);
       send({ t: "synth", id, text: sentences[i]!.text });
     }
     return entry.result;
+  }
+
+  /** Asks for sentences `from` up to Listen's lead on sentence `i` (in order, so the worker says them in order); returns the end. */
+  function makeAhead(from: number, i: number): number {
+    const end = aheadEnd(sentences, i, rate);
+    for (let k = from; k < end; k++) void audioFor(k).catch(() => {});
+    return end;
   }
 
   /** Forget made audio (except what is playing) and drop what's still queued. */
@@ -443,19 +449,32 @@ export function createListen(opts: { title: string; apex: string; post: (msg: Sh
     markWord(-1);
     opts.post({ t: "speak:at", i: sentences[i]!.unit });
     // Jumping makes everything queued for the old place useless.
-    if (moved) send({ t: "cancel", before: made.get(i)?.id ?? nextId });
-    for (let k = i; k < Math.min(sentences.length, i + 1 + AHEAD); k++) void audioFor(k).catch(() => {});
+    if (moved) {
+      const before = made.get(i)?.id ?? nextId;
+      send({ t: "cancel", before });
+      // What that cancels is asked for again below if it's still ahead of us.
+      for (const [k, entry] of made) {
+        if (entry.done || entry.id >= before) continue;
+        entry.result.then((m) => URL.revokeObjectURL(m.url), () => {});
+        made.delete(k);
+      }
+    }
+    const end = makeAhead(i, i);
     // Let go of audio well behind or ahead of us.
     for (const [k, { result }] of made) {
-      if (k < i - 1 || k > i + AHEAD + 4) {
+      if (k < i - 1 || k >= end + 4) {
         result.then((m) => URL.revokeObjectURL(m.url), () => {});
         made.delete(k);
       }
     }
     set(ready ? "buffering" : "loading");
+    // Having to wait means the voice is behind (just started, jumped, or a slow stretch): wait for the
+    // sentence after this one too, so the reading doesn't stop again a moment later.
+    const behind = !made.get(i)?.done;
     let m: Made;
     try {
       m = await audioFor(i);
+      if (behind && i + 1 < sentences.length) await audioFor(i + 1).catch(() => {});
     } catch (err) {
       if (mine !== generation) return;
       const e = err as Error & { fatal?: boolean };
@@ -573,6 +592,8 @@ export function createListen(opts: { title: string; apex: string; post: (msg: Sh
     rate = r;
     remember(RATE_KEY, String(r));
     audio.playbackRate = r;
+    // Faster listening needs more made ahead to stay as far in front.
+    if (worker && wantPlay && sentences.length) makeAhead(at + 1, at);
     paint();
   }
 
@@ -708,7 +729,7 @@ export function createListen(opts: { title: string; apex: string; post: (msg: Sh
         at = i;
         current.i = i;
         opts.post({ t: "speak:at", i: fresh[i]!.unit });
-        for (let k = i + 1; k < Math.min(fresh.length, i + 1 + AHEAD); k++) void audioFor(k).catch(() => {});
+        makeAhead(i + 1, i);
         paint();
         return;
       }

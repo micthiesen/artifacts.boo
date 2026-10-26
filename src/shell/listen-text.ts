@@ -7,6 +7,18 @@ import type { SpeakUnit } from "../shared/protocol.ts";
  * never waits behind a long one, and the model doesn't drift.
  */
 export const MAX_CHARS = 160;
+/** About how many characters the voice says a second at 1× (Bruno at Listen's pace); only used to plan ahead. */
+export const CHARS_PER_SECOND = 14;
+/**
+ * Audio is made this many seconds of listening ahead of the sentence playing, counted in text rather than
+ * sentences: a run of short ones (headings, list items) lasts moments, and the long sentence after them must
+ * already be made by then, or the reading stops mid-page while a slow phone catches up.
+ */
+export const AHEAD_SECONDS = 30;
+/** Never fewer sentences ahead than this, nor more (each one queued is work a jump throws away). */
+export const MIN_AHEAD = 2;
+export const MAX_AHEAD = 24;
+
 /** What Listen takes from a page, at most. Beyond this it reads up to here and says so. */
 export const MAX_UNITS = 5000;
 export const MAX_UNIT_CHARS = 20_000;
@@ -98,4 +110,15 @@ export function splitSentences(units: SpeakUnit[], segmenter: { segment(s: strin
 
 function defaultSegmenter() {
   return typeof Intl.Segmenter === "function" ? new Intl.Segmenter("en", { granularity: "sentence" }) : null;
+}
+
+/** One past the last sentence to have made while sentence `i` plays at playback rate `rate`. */
+export function aheadEnd(sentences: readonly Pick<Sentence, "chars">[], i: number, rate = 1): number {
+  const want = AHEAD_SECONDS * CHARS_PER_SECOND * rate;
+  const last = Math.min(sentences.length, i + 1 + MAX_AHEAD);
+  let end = Math.min(last, i + 1 + MIN_AHEAD);
+  let chars = 0;
+  for (let k = i + 1; k < end; k++) chars += sentences[k]!.chars;
+  while (end < last && chars < want) chars += sentences[end++]!.chars;
+  return end;
 }

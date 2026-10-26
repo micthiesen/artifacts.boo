@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { MAX_CHARS, MAX_UNITS, pieces, splitSentences, takeUnits } from "../src/shell/listen-text.ts";
+import { AHEAD_SECONDS, aheadEnd, CHARS_PER_SECOND, MAX_AHEAD, MAX_CHARS, MAX_UNITS, MIN_AHEAD, pieces, splitSentences, takeUnits } from "../src/shell/listen-text.ts";
 
 const unit = (i: number, text: string, h?: string) => ({ i, text, h });
 
@@ -61,4 +61,24 @@ test("a frame's units are bounded and malformed ones dropped", () => {
   const taken = takeUnits(many);
   expect(taken.units.length).toBe(MAX_UNITS);
   expect(taken.truncated).toBe(true);
+});
+
+test("audio is made ahead by listening time, so a run of short sentences queues the long one after it", () => {
+  const short = { chars: 10 };
+  const long = { chars: 160 };
+  const page = [short, short, short, short, short, long, long, long, long, long, long, long];
+  // At least two ahead, then on until about AHEAD_SECONDS of text: the long sentence after the short run is in.
+  const end = aheadEnd(page, 0);
+  expect(end).toBeGreaterThan(5);
+  const chars = page.slice(1, end).reduce((n, s) => n + s.chars, 0);
+  expect(chars).toBeGreaterThanOrEqual(AHEAD_SECONDS * CHARS_PER_SECOND);
+  expect(chars - page[end - 1]!.chars).toBeLessThan(AHEAD_SECONDS * CHARS_PER_SECOND);
+  // Faster listening reaches further; the end of the page and MAX_AHEAD bound it.
+  expect(aheadEnd(page, 0, 2)).toBeGreaterThan(end);
+  expect(aheadEnd(page, 10)).toBe(12);
+  expect(aheadEnd(page, 11)).toBe(12);
+  const tiny = Array.from({ length: 100 }, () => ({ chars: 1 }));
+  expect(aheadEnd(tiny, 0)).toBe(1 + MAX_AHEAD);
+  // Long sentences still get the minimum.
+  expect(aheadEnd(Array.from({ length: 10 }, () => ({ chars: 2000 })), 0)).toBe(1 + MIN_AHEAD);
 });
