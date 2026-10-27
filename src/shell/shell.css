@@ -707,7 +707,7 @@ div.thread-anchor { cursor: default; }
 }
 .toast button:hover { background: var(--accent); }
 @keyframes toast-in { from { opacity: 0; transform: translate(-50%, .5rem); } }
-/* A toast that times out drops away quickly (src/shell/home.ts waits --motion-fast before removing it). */
+/* A toast that times out drops away quickly (src/shell/toast.ts waits --motion-fast before removing it). */
 .toast.leaving { opacity: 0; translate: 0 .5rem; pointer-events: none; transition: opacity var(--motion-fast) var(--motion-ease), translate var(--motion-fast) var(--motion-ease); }
 
 .archived-bar {
@@ -1120,3 +1120,67 @@ select.input, select.om-select, .profile select {
   .listen-follow svg { width: 16px; height: 16px; }
   .listen-play { width: 2.5rem; height: 2.5rem; }
 }
+
+/* ---- Vim-style keys (src/shell/keys.ts) ---- */
+.keys-help kbd, .account-keys kbd {
+  display: inline-block; min-width: 1.5em; padding: .05rem .4rem; border: 1px solid var(--border); border-bottom-width: 2px;
+  border-radius: .35rem; background: var(--secondary); color: var(--fg); font: 600 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+  text-align: center; font-variant-numeric: tabular-nums;
+}
+.account-menu .account-keys { display: flex; align-items: center; gap: .5rem; }
+.account-menu .account-keys kbd { margin-left: auto; font-size: 11px; min-width: 1.4em; padding: 0 .3rem; color: var(--muted-fg); }
+
+/* What has been typed so far (3, g) or a short note, in the corner: vim's showcmd. */
+.keys-showcmd {
+  position: fixed; right: 12px; bottom: max(12px, env(safe-area-inset-bottom)); z-index: 70; max-width: calc(100vw - 24px);
+  padding: 4px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--popover); color: var(--fg);
+  font-size: 13px; line-height: 20px; font-variant-numeric: tabular-nums; box-shadow: var(--shadow-pop); pointer-events: none;
+  transition: opacity var(--motion-fast) var(--motion-ease), display var(--motion-fast) allow-discrete;
+}
+.keys-showcmd[hidden] { display: none; opacity: 0; }
+@starting-style { .keys-showcmd:not([hidden]) { opacity: 0; } }
+
+/* The key sheet (?): ruled rows in one panel, opening from the middle and reversing if closed early. */
+.keys-help {
+  width: min(40rem, calc(100vw - 2rem)); max-height: min(44rem, calc(100dvh - 2rem)); padding: 0; overflow: auto;
+  border: 1px solid var(--border); border-radius: calc(var(--radius) + 4px); background: var(--popover); color: var(--fg);
+  box-shadow: var(--shadow-pop); opacity: 0; scale: .97;
+  transition: opacity var(--motion-base) var(--motion-ease), scale var(--motion-base) var(--motion-spring),
+    display var(--motion-base) allow-discrete, overlay var(--motion-base) allow-discrete;
+}
+.keys-help[open] { opacity: 1; scale: 1; }
+@starting-style { .keys-help[open] { opacity: 0; scale: .97; } }
+.keys-help::backdrop {
+  background: oklch(0 0 0 / .45); opacity: 0;
+  transition: opacity var(--motion-base) var(--motion-ease), display var(--motion-base) allow-discrete, overlay var(--motion-base) allow-discrete;
+}
+.keys-help[open]::backdrop { opacity: 1; }
+@starting-style { .keys-help[open]::backdrop { opacity: 0; } }
+.keys-help-head {
+  position: sticky; top: 0; z-index: 1; display: flex; align-items: center; justify-content: space-between; gap: 1rem;
+  padding: .9rem 1rem .8rem 1.25rem; border-bottom: 1px solid var(--border); background: var(--popover);
+}
+.keys-help-head h2 { margin: 0; font-size: 16px; font-weight: 650; }
+.keys-help-close {
+  display: grid; place-items: center; width: 32px; height: 32px; padding: 0; border: 0; border-radius: .5rem;
+  background: transparent; color: var(--muted-fg); cursor: pointer; transition: background-color var(--motion-fast), color var(--motion-fast);
+}
+.keys-help-close:hover, .keys-help-close:active { background: var(--secondary); color: var(--fg); }
+.keys-help-body { display: grid; grid-template-columns: repeat(auto-fit, minmax(16.5rem, 1fr)); gap: 0 2rem; padding: .25rem 1.25rem 1rem; }
+.keys-help-body section { min-width: 0; }
+.keys-help-body h3 { margin: 1rem 0 .35rem; color: var(--muted-fg); font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; }
+.keys-help-body dl { display: grid; grid-template-columns: auto 1fr; margin: 0; }
+.keys-help-body dt, .keys-help-body dd { padding: .4rem 0; border-top: 1px solid var(--border); }
+.keys-help-body dt { display: flex; flex-wrap: wrap; align-items: center; gap: .25rem; padding-right: .9rem; white-space: nowrap; }
+.keys-help-body dd { margin: 0; font-size: 14px; color: var(--fg); }
+.keys-or { color: var(--muted-fg); font-size: 12px; }
+.keys-help-foot {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .5rem 1rem;
+  padding: .8rem 1.25rem; border-top: 1px solid var(--border); color: var(--muted-fg); font-size: 13px;
+}
+.keys-help-foot p { margin: 0; }
+.keys-help-off {
+  padding: .35rem .7rem; border: 1px solid var(--border); border-radius: .5rem; background: transparent; color: var(--fg);
+  font: inherit; cursor: pointer; transition: background-color var(--motion-fast);
+}
+.keys-help-off:hover, .keys-help-off:active { background: var(--secondary); }

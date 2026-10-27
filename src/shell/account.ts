@@ -15,6 +15,7 @@ import { cue, move } from "../shared/motion.ts";
 import { relativeTime } from "../shared/time.ts";
 import { readSoundsCookie, setSoundsEnabled, soundsCookie, soundsScopeOf, unlockAudio } from "../shared/sound.ts";
 import { PALETTE, whoColor } from "../shared/who.ts";
+import { keysOn, onKeysChanged, setKeysOn } from "./keys.ts";
 
 // Short labels for the segmented row; the title says it in full.
 const LEVELS: [WatchLevel, string, string][] = [
@@ -413,6 +414,19 @@ export function mountAccountMenu(slot: HTMLElement, email: string, options: Acco
     options.onSounds?.(soundsOn);
   });
   menu.append(sounds);
+  // Vim-style keys (src/shell/keys.ts): on unless turned off here, per device like Sounds.
+  const keys = document.createElement("button");
+  keys.type = "button";
+  keys.setAttribute("role", "menuitemcheckbox");
+  keys.className = "account-keys";
+  keys.title = "Vim-style keys: j and k move, ? lists them all (this device only)";
+  keys.append("Keyboard shortcuts", Object.assign(document.createElement("kbd"), { textContent: "?" }));
+  keys.lastElementChild!.setAttribute("aria-hidden", "true");
+  const paintKeys = () => keys.setAttribute("aria-checked", String(keysOn()));
+  paintKeys();
+  onKeysChanged(paintKeys);
+  keys.addEventListener("click", () => setKeysOn(!keysOn()));
+  menu.append(keys);
   divide();
   const link = (href: string, label: string) => {
     const here = new URL(href, location.href);

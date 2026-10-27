@@ -754,6 +754,11 @@ export function createListen(opts: { title: string; apex: string; post: (msg: Sh
       if (tray.hidden) open();
       else closeTray();
     },
+    /** The s key: opens Listen, or plays and pauses it once open. */
+    playPause() {
+      if (tray.hidden) open();
+      else play.click();
+    },
     /** The frame's readable text arrived. */
     units(units: SpeakUnit[], start: number) {
       if (tray.hidden || !collectPending) return;

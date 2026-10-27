@@ -67,6 +67,22 @@ export function focusThread(id: string) {
   }
 }
 
+/** Whether this viewer may start a comment. */
+export function commentAllowed(): boolean {
+  return canComment;
+}
+
+/** Each placed thread with the element its anchor starts in, in page order (for the keys' ]t and [t). */
+export function threadNodes(): { id: string; node: Element }[] {
+  const out: { id: string; node: Element }[] = [];
+  for (const p of placed) {
+    const start = p.range?.startContainer;
+    const node = start ? (start instanceof Element ? start : start.parentElement) : p.el;
+    if (node?.isConnected) out.push({ id: p.id, node });
+  }
+  return out;
+}
+
 export function markChanged(blocks: string[]) {
   changedBlocks = blocks;
   applyChanged();
@@ -131,9 +147,9 @@ export function locate(anchor: Anchor | null): { status: AnchorStatus; range: Ra
   return { status: "anchored", range: null, el: null };
 }
 
-type TextIndex = { text: string; nodes: { node: Text; start: number }[] };
+export type TextIndex = { text: string; nodes: { node: Text; start: number }[] };
 
-function textIndex(scope: Node): TextIndex {
+export function textIndex(scope: Node): TextIndex {
   const nodes: { node: Text; start: number }[] = [];
   let text = "";
   const walker = document.createTreeWalker(scope, NodeFilter.SHOW_TEXT, {
@@ -146,7 +162,7 @@ function textIndex(scope: Node): TextIndex {
   return { text, nodes };
 }
 
-function rangeAt(index: TextIndex, start: number, end: number): Range | null {
+export function rangeAt(index: TextIndex, start: number, end: number): Range | null {
   const range = document.createRange();
   const pos = (offset: number, preferEnd: boolean) => {
     for (let i = 0; i < index.nodes.length; i++) {
@@ -407,7 +423,7 @@ function inButtonCorridor(e: PointerEvent, block: Element): boolean {
   );
 }
 
-function blockAnchor(block: Element): Anchor {
+export function blockAnchor(block: Element): Anchor {
   const id = block.getAttribute("data-b")!;
   // Charts' text is axis ticks run together; name the element instead.
   if (block.querySelector(".recharts-wrapper, canvas")) return { block: id, label: "Chart" };

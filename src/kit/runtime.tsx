@@ -12,6 +12,7 @@ import { focusThread, installAnnotations, markChanged, setThreads } from "./anno
 import { preparePrint } from "./print.ts";
 import { collectSpeech, markSpeaking, markWord, speakFollow, speakMode, speakState } from "./speak.ts";
 import { setSoundsEnabled } from "../shared/sound.ts";
+import { installKeys, runKey, setKeysOn } from "./keys.ts";
 import { rememberColours } from "../shared/who.ts";
 
 const LS_PREFIX = "ls:";
@@ -272,6 +273,7 @@ export async function boot(options: BootOptions = {}): Promise<void> {
         rememberColours(msg.colours);
         store.init({ ...msg, theme: THEME });
         setSoundsEnabled(msg.sounds === true);
+        setKeysOn(msg.keys !== false);
         applyTheme();
         shims?.seedFromStore();
         resolveInit();
@@ -281,6 +283,12 @@ export async function boot(options: BootOptions = {}): Promise<void> {
         break;
       case "sounds":
         setSoundsEnabled(msg.on === true);
+        break;
+      case "keys":
+        setKeysOn(msg.on === true);
+        break;
+      case "key":
+        whenRendered(() => runKey(msg.cmd, msg.count));
         break;
       case "presence":
         rememberColours(msg.colours);
@@ -363,6 +371,7 @@ export async function boot(options: BootOptions = {}): Promise<void> {
   root.render(<Frame Entry={Entry} markdown={markdown} />);
   if (!check) {
     installAnnotations(rootEl, send);
+    installKeys(rootEl, send);
     // Give the first render (and lazy charts) a moment before anchoring.
     setTimeout(() => {
       rendered = true;

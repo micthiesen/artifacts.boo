@@ -4,6 +4,8 @@
 import { setArchived } from "./archive.ts";
 import { setPinned } from "./pins.ts";
 import { motionMs } from "../shared/motion.ts";
+import { toast } from "./toast.ts";
+import { note, onKey, setKeysWhere } from "./keys-registry.ts";
 
 // On the list itself, the logo reloads the page (handy for checking changes).
 for (const a of document.querySelectorAll<HTMLAnchorElement>(".bar a[href='/']")) {
@@ -15,34 +17,6 @@ for (const a of document.querySelectorAll<HTMLAnchorElement>(".bar a[href='/']")
 }
 
 const removals = new WeakMap<HTMLLIElement, ReturnType<typeof setTimeout>>();
-
-let toastTimer: ReturnType<typeof setTimeout> | undefined;
-function toast(message: string, action?: { label: string; run: () => void }) {
-  document.querySelector(".toast")?.remove();
-  clearTimeout(toastTimer);
-  const el = document.createElement("div");
-  el.className = "toast";
-  el.setAttribute("role", "status");
-  const text = document.createElement("span");
-  text.textContent = message;
-  el.append(text);
-  if (action) {
-    const b = document.createElement("button");
-    b.type = "button";
-    b.textContent = action.label;
-    b.addEventListener("click", () => {
-      el.remove();
-      action.run();
-    });
-    el.append(b);
-  }
-  document.body.append(el);
-  // Timing out, it drops away (.toast.leaving); a new toast replacing it just takes its place.
-  toastTimer = setTimeout(() => {
-    el.classList.add("leaving");
-    toastTimer = setTimeout(() => el.remove(), motionMs("fast"));
-  }, 6000);
-}
 
 function adjustCount(delta: number) {
   const el = document.querySelector<HTMLElement>("[data-archived-count]");
@@ -285,3 +259,45 @@ if (searchForm && searchInput) {
     void fetchResults(searchInput.value.trim().replace(/\s+/g, " "));
   });
 }
+
+// Keys (src/shared/keys.ts): j and k move the focus down the list, Enter or o opens a row, p pins it, / searches.
+setKeysWhere("list");
+const rows = () => [...document.querySelectorAll<HTMLLIElement>("ul.list > li[data-id]:not([hidden])")];
+const rowLink = (li: HTMLLIElement | undefined) => li?.querySelector<HTMLAnchorElement>(":scope > a[href]") ?? null;
+const focusedRow = () => rows().findIndex((li) => li.contains(document.activeElement));
+function focusRow(i: number) {
+  const list = rows();
+  const link = rowLink(list[Math.max(0, Math.min(list.length - 1, i))]);
+  if (!link) return false;
+  link.focus({ preventScroll: true });
+  link.scrollIntoView({ block: "nearest" });
+}
+onKey("down", (n) => {
+  const at = focusedRow();
+  return focusRow(at < 0 ? 0 : at + n);
+});
+onKey("up", (n) => {
+  const at = focusedRow();
+  return focusRow(at < 0 ? 0 : at - n);
+});
+onKey("top", () => focusRow(0));
+onKey("bottom", () => focusRow(rows().length - 1));
+onKey("open", () => {
+  const link = rowLink(rows()[focusedRow()]);
+  if (!link) return false;
+  link.click();
+});
+onKey("pin", () => {
+  const button = rows()[focusedRow()]?.querySelector<HTMLButtonElement>(".row-action.pin");
+  if (!button) return note("Move to a row with j first");
+  button.click();
+});
+onKey("find", () => {
+  if (!searchInput) return false;
+  searchInput.focus();
+  searchInput.select();
+});
+onKey("escape", () => {
+  if (focusedRow() < 0) return false;
+  (document.activeElement as HTMLElement | null)?.blur();
+});

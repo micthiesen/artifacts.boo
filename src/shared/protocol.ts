@@ -2,6 +2,8 @@
 // artifact frame. The frame has an opaque origin and no network access; every
 // capability it has arrives over postMessage from the shell.
 
+import type { Cmd } from "./keys.ts";
+
 export type Role = "owner" | "edit" | "view";
 
 export type Viewer = {
@@ -32,7 +34,12 @@ export type FrameMessage =
   /** Listen: the page re-rendered under the reading (the marked text is gone); collect it again. */
   | { t: "speak:stale" }
   /** Listen: the reader scrolled by hand (Follow off) or tapped a paragraph to read from (Follow on). */
-  | { t: "speak:follow"; on: boolean };
+  | { t: "speak:follow"; on: boolean }
+  /**
+   * A key command for the shell (src/shared/keys.ts): help, go to, the drawer, Listen. `yank` carries the
+   * block's fragment (`arg`) or the selected text (`text`) to copy.
+   */
+  | { t: "key"; cmd: Cmd; count?: number; arg?: string; text?: string };
 
 /** One block of the page as Listen reads it; `i` names the element in the frame, `h` the heading it sits under. */
 export type SpeakUnit = { i: number; text: string; h?: string };
@@ -57,6 +64,8 @@ export type ShellMessage =
       sounds?: boolean;
       /** Members' stored avatar colours (palette indexes, src/shared/who.ts) by email. */
       colours?: Record<string, number>;
+      /** Vim-style keys are on for this device (absent: on). */
+      keys?: boolean;
     }
   /** `remote`: someone else (or another tab) made these changes, so the page shows them arriving. */
   | { t: "shared"; changes: Record<string, JsonValue | null>; remote?: boolean; reverted?: boolean }
@@ -82,7 +91,11 @@ export type ShellMessage =
   | { t: "speak:state"; state: "playing" | "waiting" | "resting" }
   /** Listen: Follow (scrolling to keep the reading in view) turned on or off in the tray. */
   | { t: "speak:follow"; on: boolean }
-  | { t: "speak:mode"; on: boolean };
+  | { t: "speak:mode"; on: boolean }
+  /** A page command pressed while the shell had focus (src/shared/keys.ts). */
+  | { t: "key"; cmd: Cmd; count: number }
+  /** Keys turned on or off in the account menu. */
+  | { t: "keys"; on: boolean };
 
 /** Shell <-> Worker sync WebSocket (one per open artifact tab). */
 export type SyncClientMessage =

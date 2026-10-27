@@ -5,6 +5,7 @@
 @source not "./**/*.test.ts";
 @import "./theme.css";
 @import "./annotate.css";
+@import "./keys.css";
 @import "./motion.css";
 @import "./print.css";
 

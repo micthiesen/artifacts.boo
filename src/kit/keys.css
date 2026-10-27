@@ -1,0 +1,136 @@
+/* Vim-style keys in the frame (src/kit/keys-page.ts). The cursor is yours, so it
+   wears your light (iris). It appears in place as it moves, never slides, and
+   sets nothing but an outline on the artifact's element, so the block keeps its
+   own look and animations. A long jump lands with a halo that fades out, on a
+   layer of its own (.art-landing) over the block. */
+:where(.art-cursor) {
+  border-radius: 6px;
+}
+.art-cursor {
+  outline: 2px solid var(--primary);
+  outline-offset: 4px;
+  scroll-margin-block: 15vh;
+}
+/* Inside something that clips (a table's scroller), the ring is drawn inside. */
+.art-cursor-inset {
+  outline-offset: -2px;
+}
+.art-landing {
+  position: absolute;
+  z-index: 30;
+  border-radius: 8px;
+  pointer-events: none;
+  animation: art-landed var(--motion-attention) var(--motion-ease) forwards;
+}
+@keyframes art-landed {
+  from {
+    box-shadow: 0 0 0 10px color-mix(in oklab, var(--primary) 30%, transparent);
+  }
+  to {
+    box-shadow: 0 0 0 10px transparent;
+  }
+}
+
+::highlight(art-find) {
+  background-color: color-mix(in oklab, var(--primary) 20%, transparent);
+}
+::highlight(art-find-current) {
+  background-color: color-mix(in oklab, var(--primary) 38%, transparent);
+  color: var(--foreground);
+}
+
+/* What has been typed so far (3, g, ] ), a mode, or a short note: vim's showcmd, in the corner. */
+.art-showcmd {
+  position: fixed;
+  right: 12px;
+  bottom: 12px;
+  z-index: 90;
+  max-width: calc(100vw - 24px);
+  padding: 4px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--popover);
+  color: var(--foreground);
+  font: 500 13px/20px var(--font-sans);
+  font-variant-numeric: tabular-nums;
+  box-shadow: var(--shadow-pop);
+  pointer-events: none;
+  transition:
+    opacity var(--motion-fast) var(--motion-ease),
+    display var(--motion-fast) allow-discrete;
+}
+.art-showcmd[hidden] {
+  display: none;
+  opacity: 0;
+}
+@starting-style {
+  .art-showcmd:not([hidden]) {
+    opacity: 0;
+  }
+}
+
+/* Find on the page (/): a small bar in the corner; Enter keeps the matches lit for n and N. */
+.art-keys-find {
+  position: fixed;
+  right: 12px;
+  bottom: 12px;
+  z-index: 91;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: min(320px, calc(100vw - 24px));
+  padding: 6px 6px 6px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--popover);
+  box-shadow: var(--shadow-pop);
+  transition:
+    opacity var(--motion-base) var(--motion-ease),
+    translate var(--motion-base) var(--motion-spring),
+    display var(--motion-base) allow-discrete;
+}
+.art-keys-find[hidden] {
+  display: none;
+  opacity: 0;
+  translate: 0 6px;
+}
+@starting-style {
+  .art-keys-find:not([hidden]) {
+    opacity: 0;
+    translate: 0 6px;
+  }
+}
+.art-keys-find input {
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  padding: 0 8px;
+  border-radius: 6px;
+  border: 1px solid var(--input, var(--border));
+  background: var(--background);
+  color: var(--foreground);
+  font: 400 14px/1 var(--font-sans);
+}
+.art-keys-find input:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 1px;
+}
+.art-keys-find-count {
+  flex: none;
+  color: var(--muted-foreground);
+  font: 500 12px/1 var(--font-sans);
+  font-variant-numeric: tabular-nums;
+}
+
+@media print {
+  .art-cursor {
+    outline: none;
+  }
+  .art-landing {
+    display: none;
+  }
+  ::highlight(art-find),
+  ::highlight(art-find-current) {
+    background-color: transparent;
+  }
+}

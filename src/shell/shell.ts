@@ -22,6 +22,8 @@ import { setPinned } from "./pins.ts";
 import { rememberColours, whoColor } from "../shared/who.ts";
 import { cue, move, shown } from "../shared/motion.ts";
 import { readSoundsCookie, setSoundsEnabled, soundsEnabled, soundsScopeOf } from "../shared/sound.ts";
+import { KEYMAP, SHELL_CMDS, type Cmd } from "../shared/keys.ts";
+import { keysOn, note, onKey, onKeysChanged, runKey, setKeysWhere } from "./keys.ts";
 
 const boot: ShellBoot = JSON.parse(document.getElementById("shell-boot")!.textContent!);
 // Members' stored colours, before anything draws an avatar.
@@ -148,7 +150,7 @@ function post(msg: ShellMessage) {
 function maybeInit() {
   if (!frameReady || initSent || !snapshotReceived) return;
   initSent = true;
-  post({ t: "init", viewer: boot.viewer, local, shared, presence, theme: theme(), backlinks: boot.backlinks, linkTitles: boot.linkTitles, sounds: soundsEnabled(), colours: boot.colours });
+  post({ t: "init", viewer: boot.viewer, local, shared, presence, theme: theme(), backlinks: boot.backlinks, linkTitles: boot.linkTitles, sounds: soundsEnabled(), colours: boot.colours, keys: keysOn() });
   // A link to a section (/a/<id>#<section>) scrolls there once the page has rendered.
   const section = sectionOf(location.hash);
   if (section) post({ t: "scroll", target: section });
@@ -192,6 +194,65 @@ if (listenSupported()) {
     listen ??= createListen({ title: boot.title, apex: boot.apex, post, host: document.querySelector(".shell")!, trigger: listenButton });
     listen.toggle();
   });
+}
+
+// ---- keys ------------------------------------------------------------------------------
+// Page keys pressed while the shell has focus go to the frame, which then has the focus, so the next keys
+// (and selecting words with v) are read there directly. src/kit/keys.ts carries them out.
+setKeysWhere("artifact");
+onKeysChanged((on) => post({ t: "keys", on }));
+const SHELL_ONLY = new Set<Cmd>(["pin", "reply", "resolve", "undo"]);
+const threadsPanel = document.getElementById("threads")!;
+for (const cmd of new Set(KEYMAP.filter((k) => k.mode === "normal").map((k) => k.cmd))) {
+  if (SHELL_CMDS.has(cmd) || SHELL_ONLY.has(cmd)) continue;
+  onKey(cmd, (count) => {
+    // The drawer reads its own keys; page keys pressed there don't pull the focus out of it.
+    if (!initSent || threadsPanel.contains(document.activeElement)) return false;
+    post({ t: "key", cmd, count });
+    // Escape stays where it is (it may be closing something here too).
+    if (cmd === "escape") return false;
+    iframe.focus();
+  });
+}
+onKey("threads", () => drawer.keys());
+
+/** s in the frame: open Listen, or play and pause it (the frame has already said where to read from). */
+function listenKey() {
+  if (!listenSupported()) return note("Listen doesn't work in this browser");
+  listen ??= createListen({ title: boot.title, apex: boot.apex, post, host: document.querySelector(".shell")!, trigger: listenButton });
+  listen.playPause();
+}
+
+/** Longest text the frame may have copied: more than any selection of words (a quote is at most 1000 characters). */
+const MAX_COPY = 2000;
+
+/** y in the frame: a link to the block (its fragment), or the words selected with v. */
+function copyFromFrame(arg: string, text: string | undefined) {
+  const link = `${location.href.split("#")[0]}${arg ? `#${encodeURIComponent(arg)}` : ""}`;
+  navigator.clipboard.writeText(text ?? link).then(
+    () => note(text !== undefined ? "Copied the selected words" : arg ? "Link to this block copied" : "This block has no link of its own: page link copied"),
+    () => note("Couldn't copy"),
+  );
+}
+
+/**
+ * A command from the frame's keys. Artifact code can post these too, so: only the shell's own commands, only
+ * with the keys on, and only straight after a real key press there (it activates this page too). Going
+ * elsewhere needs that proof outright; a browser without the activation API still gets the rest.
+ */
+let lastFrameKey = 0;
+function frameKey(msg: Extract<FrameMessage, { t: "key" }>) {
+  const activation = (navigator as Navigator & { userActivation?: { isActive: boolean } }).userActivation;
+  const pressed = activation ? activation.isActive : true;
+  const now = Date.now();
+  if (!keysOn() || !pressed || now - lastFrameKey < 100) return;
+  lastFrameKey = now;
+  if (msg.cmd === "yank") {
+    if (typeof msg.text === "string" && msg.text.length <= MAX_COPY) copyFromFrame("", msg.text);
+    else if (typeof msg.arg === "string" && msg.arg.length <= 200) copyFromFrame(msg.arg, undefined);
+  } else if (msg.cmd === "listen") listenKey();
+  else if (msg.cmd === "help" || msg.cmd === "threads") runKey(msg.cmd, 1);
+  else if ((msg.cmd === "goHome" || msg.cmd === "goInbox" || msg.cmd === "goSettings") && activation?.isActive) runKey(msg.cmd, 1);
 }
 
 const drawer = createDrawer(document.getElementById("threads")!, toggle, {
@@ -313,6 +374,9 @@ window.addEventListener("message", (event) => {
       break;
     case "speak:follow":
       listen?.follow(msg.on === true);
+      break;
+    case "key":
+      frameKey(msg);
       break;
   }
 });

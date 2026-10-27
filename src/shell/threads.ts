@@ -4,6 +4,9 @@
 // shell, so artifact code can't read or forge comments.
 import type { Anchor, AnchorStatus, Person, SyncClientMessage, Thread } from "../shared/protocol.ts";
 import { whoColor } from "../shared/who.ts";
+import { keyIsTheirs, keyToken } from "../shared/keys.ts";
+import { keysOn } from "./keys.ts";
+import { toast } from "./toast.ts";
 
 export type DrawerOptions = {
   me: string | null;
@@ -107,6 +110,8 @@ export function createDrawer(panel: HTMLElement, toggle: HTMLButtonElement, opts
     updateToggle();
     if (!isOpen()) return;
     const focusKey = (document.activeElement as HTMLElement | null)?.dataset?.key;
+    // A card the keys moved to keeps the focus when the list redraws (a comment arriving).
+    const focusCard = (document.activeElement as HTMLElement | null)?.matches?.("article.thread") ? (document.activeElement as HTMLElement).dataset.thread : undefined;
     const all = [...threads.values()].filter((t) => t.comments.length);
     const open = all.filter((t) => !t.resolved);
     const resolved = all.filter((t) => t.resolved);
@@ -168,6 +173,7 @@ export function createDrawer(panel: HTMLElement, toggle: HTMLButtonElement, opts
     }
     panel.replaceChildren(head, body);
     if (focusKey) panel.querySelector<HTMLElement>(`[data-key="${focusKey}"]`)?.focus();
+    else if (focusCard) cardEl(focusCard)?.focus({ preventScroll: true });
     if (pendingFocus) {
       const target = panel.querySelector(`[data-thread="${CSS.escape(pendingFocus)}"]`);
       target?.scrollIntoView({ block: "nearest" });
@@ -191,6 +197,8 @@ export function createDrawer(panel: HTMLElement, toggle: HTMLButtonElement, opts
     const status = statusOf(t.id);
     const c = el("article", `thread${t.id === activeId ? " is-active" : ""}`);
     c.dataset.thread = t.id;
+    // The keys (j, k) move the focus between cards.
+    c.tabIndex = -1;
     const chips = el("div", "thread-chips");
     if (t.addressedIn) chips.append(chip(`Addressed in v${t.addressedIn}`, "positive"));
     else if (t.resolved) chips.append(chip(`Resolved by ${nameOf(t.resolved.by)}`, "muted"));
@@ -313,6 +321,13 @@ export function createDrawer(panel: HTMLElement, toggle: HTMLButtonElement, opts
     actions.prepend(hint);
     c.append(input, actions);
     queueMicrotask(() => input.focus());
+    // Opened by a held key (c): its auto-repeat doesn't type into the box. The first real press or release ends that.
+    let fresh = true;
+    input.addEventListener("keyup", () => (fresh = false), { once: true });
+    input.addEventListener("keydown", (e) => {
+      if (fresh && e.repeat) e.preventDefault();
+      else fresh = false;
+    });
     return c;
   }
 
@@ -320,6 +335,69 @@ export function createDrawer(panel: HTMLElement, toggle: HTMLButtonElement, opts
     activeId = id;
     opts.focus(id);
     render();
+  }
+
+  // ---- keys (src/shared/keys.ts): j and k between comments, Enter shows one, r replies, x resolves ----
+
+  function cardEl(id: string): HTMLElement | null {
+    return panel.querySelector<HTMLElement>(`article.thread[data-thread="${CSS.escape(id)}"]`);
+  }
+
+  function cards(): HTMLElement[] {
+    return [...panel.querySelectorAll<HTMLElement>("article.thread[data-thread]")];
+  }
+
+  function focusCardEl(card: HTMLElement | undefined) {
+    if (!card) return;
+    card.focus({ preventScroll: true });
+    card.scrollIntoView({ block: "nearest" });
+    // The page follows: the comment's text is shown and lit there.
+    const id = card.dataset.thread!;
+    if (id !== activeId && statusOf(id) !== "orphaned") select(id);
+  }
+
+  panel.addEventListener("keydown", (e) => {
+    if (!keysOn() || keyIsTheirs(e)) return;
+    const list = cards();
+    const at = list.findIndex((c) => c.contains(document.activeElement));
+    const card = list[at];
+    const token = keyToken(e);
+    let done = true;
+    if (token === "j" || token === "k") focusCardEl(list[at < 0 ? 0 : Math.max(0, Math.min(list.length - 1, at + (token === "j" ? 1 : -1)))]);
+    else if ((token === "Enter" || token === "o") && card) select(card.dataset.thread!);
+    else if (token === "r" && card?.querySelector("textarea")) card.querySelector<HTMLTextAreaElement>("textarea")!.focus();
+    else if (token === "x" && card) resolveByKey(card.dataset.thread!);
+    else if (token === "u" && undoResolve) undoResolve();
+    else if (token === "Escape") {
+      setOpen(false);
+      toggle.focus();
+    } else done = false;
+    if (done) e.preventDefault();
+  });
+
+  /** The last x, until its toast goes: u (or the toast's Undo) takes it back. */
+  let undoResolve: (() => void) | null = null;
+
+  function resolveByKey(id: string) {
+    const t = threads.get(id);
+    if (!t || !opts.me || !(opts.canResolveAny || t.by === opts.me)) return;
+    const resolved = !t.resolved;
+    if (!opts.send({ t: "resolve", cid: cid(), thread: id, resolved })) return;
+    // The next card takes the focus (the one before, at the end), so x can work down the list and the keys stay here.
+    const list = cards();
+    const at = list.findIndex((c) => c.dataset.thread === id);
+    const near = list[at + 1] ?? list[at - 1];
+    if (near) focusCardEl(near);
+    else panel.querySelector<HTMLElement>(".threads-tabs button, button")?.focus();
+    const undo = () => {
+      undoResolve = null;
+      opts.send({ t: "resolve", cid: cid(), thread: id, resolved: !resolved });
+    };
+    undoResolve = undo;
+    setTimeout(() => {
+      if (undoResolve === undo) undoResolve = null;
+    }, 6000);
+    toast(`${resolved ? "Comment resolved" : "Comment reopened"}. Press u to undo.`, { label: "Undo", run: undo });
   }
 
   // ---- mentions --------------------------------------------------------------------
@@ -448,6 +526,19 @@ export function createDrawer(panel: HTMLElement, toggle: HTMLButtonElement, opts
     },
     show() {
       setOpen(true);
+    },
+    /** The t key: opens the drawer on a comment, or closes it when the keys are already in it. */
+    keys() {
+      if (isOpen() && panel.contains(document.activeElement)) {
+        setOpen(false);
+        toggle.focus();
+        return;
+      }
+      setOpen(true);
+      const list = cards();
+      const card = (activeId && cardEl(activeId)) || list[0];
+      if (card) focusCardEl(card);
+      else panel.querySelector<HTMLElement>("button.add-page, textarea, button")?.focus();
     },
     /** A comment was saved: forget its text. */
     sent(cid: string) {

@@ -266,7 +266,40 @@ export function collectSpeech(root: Element): { units: SpeakUnit[]; start: numbe
     const i = units.findIndex((u) => u.el.getBoundingClientRect().bottom > 8);
     if (i > 0) start = i;
   }
+  // Listen started from a block (the keys' s): read from the unit that is, holds or sits in it.
+  const from = Date.now() - startFromAt < 10_000 ? startFrom : null;
+  startFrom = null;
+  if (from?.isConnected) {
+    const i = units.findIndex((u) => u.el === from || u.el.contains(from) || from.contains(u.el));
+    if (i >= 0) start = i;
+  }
   return { units: out, start };
+}
+
+let startFrom: Element | null = null;
+let startFromAt = 0;
+/** The collection that follows (within a few seconds) starts reading at this block instead of the first one on screen. */
+export function speakFrom(el: Element | null) {
+  startFrom = el;
+  startFromAt = Date.now();
+}
+
+/**
+ * While listening, read from this block (as tapping it does). "current": it is the block being read; "none": it
+ * isn't a block Listen reads.
+ */
+export function speakJumpTo(el: Element): "jumped" | "current" | "none" {
+  if (!notify) return "none";
+  const unit = el.closest("[data-speak-i]") ?? el.querySelector("[data-speak-i]");
+  if (!unit) return "none";
+  if (unit.hasAttribute("data-speaking")) return "current";
+  if (!following) {
+    following = true;
+    wisp?.wispFollowing(true);
+    notify({ t: "speak:follow", on: true });
+  }
+  notify({ t: "speak:jump", i: Number(unit.getAttribute("data-speak-i")) });
+  return "jumped";
 }
 
 // ---- following along ---------------------------------------------------------------------
