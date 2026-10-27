@@ -14,6 +14,8 @@
 export type Cmd =
   | "down"
   | "up"
+  | "left"
+  | "right"
   | "halfDown"
   | "halfUp"
   | "top"
@@ -73,6 +75,8 @@ const b = (keys: string, cmd: Cmd, group: string, label: string, where: Where[] 
 export const KEYMAP: Binding[] = [
   b("j", "down", "Move", "Next block", ["artifact", "list"]),
   b("k", "up", "Move", "Previous block", ["artifact", "list"]),
+  b("h", "left", "Move", "Scroll a wide table or code block left"),
+  b("l", "right", "Move", "Scroll it right"),
   b("C-d", "halfDown", "Move", "Half a page down"),
   b("C-u", "halfUp", "Move", "Half a page up"),
   b("g g", "top", "Move", "Top", ["artifact", "list"]),
@@ -144,7 +148,7 @@ export function keyToken(e: Pick<KeyboardEvent, "key" | "ctrlKey" | "metaKey" | 
 }
 
 /** Commands a held key repeats; everything else happens once per press. */
-const REPEATS: ReadonlySet<Cmd> = new Set<Cmd>(["down", "up", "halfDown", "halfUp", "findNext", "findPrev", "wordNext", "wordEnd", "wordBack", "sentenceNext", "sentenceBack"]);
+const REPEATS: ReadonlySet<Cmd> = new Set<Cmd>(["down", "up", "left", "right", "halfDown", "halfUp", "findNext", "findPrev", "wordNext", "wordEnd", "wordBack", "sentenceNext", "sentenceBack"]);
 
 /** Widgets that own their letters or arrows: keys typed in them are theirs. */
 const OWNS_KEYS =

@@ -3,22 +3,25 @@
    sets nothing but an outline on the artifact's element, so the block keeps its
    own look and animations. A long jump lands with a halo that fades out, on a
    layer of its own (.art-landing) over the block. */
-:where(.art-cursor) {
-  border-radius: 6px;
+/* Soft corners for a square block while it wears the ring. In the base layer, so a box's own corners
+   (rounded-xl and the like, in the utilities layer) always win. */
+@layer base {
+  .art-cursor {
+    border-radius: 6px;
+  }
 }
 .art-cursor {
   outline: 2px solid var(--primary);
   outline-offset: 4px;
   scroll-margin-block: 15vh;
 }
-/* Inside something that clips (a table's scroller), the ring is drawn inside. */
+/* Where something around it clips (a card, a scroller), the ring is drawn just inside, on the same corners. */
 .art-cursor-inset {
   outline-offset: -2px;
 }
 .art-landing {
   position: absolute;
   z-index: 30;
-  border-radius: 8px;
   pointer-events: none;
   animation: art-landed var(--motion-attention) var(--motion-ease) forwards;
 }

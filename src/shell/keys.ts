@@ -4,7 +4,7 @@
 // page adds what its keys do through src/shell/keys-registry.ts: the artifact
 // page sends page commands on to the frame, the list page moves through its
 // rows. account.js and shell.js load this; one page never loads both.
-import { ctrlKeys, KEYMAP, keyEngine, keyLabel, keysCookieName, readKeysCookie, type Binding, type Cmd } from "../shared/keys.ts";
+import { ctrlKeys, KEYMAP, keyEngine, keyIsTheirs, keyLabel, keysCookieName, keyToken, readKeysCookie, type Binding, type Cmd } from "../shared/keys.ts";
 import { soundsCookie, soundsScopeOf } from "../shared/sound.ts";
 import { onKey, registry } from "./keys-registry.ts";
 
@@ -88,6 +88,20 @@ function buildHelp(): HTMLDialogElement {
     const r = d.getBoundingClientRect();
     if (e.target === d && (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom)) d.close();
   });
+  // Its own keys: q closes it (as Esc does), j and k scroll it, g g and G go to its top and bottom.
+  let g = 0;
+  d.addEventListener("keydown", (e) => {
+    if (keyIsTheirs(e)) return;
+    const token = keyToken(e);
+    const row = 40;
+    const top = token === "g" && Date.now() - g < 1200;
+    g = token === "g" && !top ? Date.now() : 0;
+    if (token === "q") d.close();
+    else if (token === "j" || token === "k") d.scrollBy({ top: token === "j" ? row : -row, behavior: "instant" });
+    else if (top || token === "G") d.scrollTo({ top: top ? 0 : d.scrollHeight, behavior: "instant" });
+    else if (token !== "g") return;
+    e.preventDefault();
+  });
   document.body.append(d);
   return d;
 }
@@ -144,7 +158,7 @@ function fillHelp(d: HTMLDialogElement) {
   const foot = document.createElement("div");
   foot.className = "keys-help-foot";
   const say = document.createElement("p");
-  say.textContent = "Keys rest while you type in a field. A number first repeats a move: 3j.";
+  say.textContent = "Keys rest while you type in a field. A number first repeats a move: 3j. Here, j and k scroll and q closes.";
   const off = document.createElement("button");
   off.type = "button";
   off.className = "keys-help-off";

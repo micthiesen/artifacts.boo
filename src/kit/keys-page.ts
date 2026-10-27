@@ -50,12 +50,15 @@ document.addEventListener("keydown", (e) => {
 
 export function run(cmd: Cmd, n: number) {
   // React may have rewritten the cursor block's classes: put the ring back.
-  if (cursor?.isConnected && !cursor.classList.contains("art-cursor")) paintCursor(cursor);
+  if (cursor?.isConnected && !ring?.classList.contains("art-cursor")) paintCursor(cursor);
   if (keysMode() === "visual") return visual(cmd, n);
   switch (cmd) {
     case "down":
     case "up":
       return step(cmd === "down" ? 1 : -1, n);
+    case "left":
+    case "right":
+      return sideways(cmd === "right" ? 1 : -1, n);
     case "halfDown":
     case "halfUp":
       return half(cmd === "halfDown" ? 1 : -1, n);
@@ -130,20 +133,55 @@ function at(list: Element[]): { i: number; fresh: boolean } {
   return { i: first < 0 ? list.length - 1 : first, fresh: true };
 }
 
+/** The element wearing the ring: the cursor block, or the rounded box around it. */
+let ring: Element | null = null;
+
+const radius = (el: Element) => parseFloat(getComputedStyle(el).borderTopLeftRadius) || 0;
+
+/**
+ * Where the ring goes: a block that is the only thing in a rounded box (a table in its card and scroller, the
+ * one paragraph of a Summary) rings the box, so the ring follows the box's corners instead of cutting across
+ * them inside it.
+ */
+function ringTarget(el: Element): Element {
+  let target = el;
+  for (let depth = 0; depth < 3 && !radius(target); depth++) {
+    const up = target.parentElement;
+    if (!up || up === keysRoot() || up.childElementCount !== 1) break;
+    target = up;
+  }
+  return radius(target) ? target : el;
+}
+
+/** Whether a ring drawn outside the element would be cut off by something that clips around it (a card, a scroller). */
+function clipped(el: Element): boolean {
+  const r = el.getBoundingClientRect();
+  for (let up = el.parentElement; up && up !== document.body; up = up.parentElement) {
+    const s = getComputedStyle(up);
+    if (s.overflowX === "visible" && s.overflowY === "visible") continue;
+    const c = up.getBoundingClientRect();
+    // The outline (2px, 4px out) must fit inside the clipping box.
+    return r.left - 6 < c.left || r.right + 6 > c.right || r.top - 6 < c.top || r.bottom + 6 > c.bottom;
+  }
+  return false;
+}
+
 function paintCursor(el: Element) {
-  // Inside something that clips (a table's scroller, a card), the ring is drawn inside the block.
-  const parent = el.parentElement;
-  el.classList.add("art-cursor");
-  el.classList.toggle("art-cursor-inset", Boolean(parent && getComputedStyle(parent).overflow !== "visible"));
+  ring?.classList.remove("art-cursor", "art-cursor-inset");
+  ring = ringTarget(el);
+  ring.classList.add("art-cursor");
+  // Where it would be cut off, the ring is drawn just inside the edge instead, on the same corners.
+  ring.classList.toggle("art-cursor-inset", clipped(ring));
 }
 
 function setCursor(el: Element | null, jump = false) {
-  if (cursor) cursor.classList.remove("art-cursor", "art-cursor-inset");
+  ring?.classList.remove("art-cursor", "art-cursor-inset");
+  ring = null;
   cursor = el;
   if (!el) return;
   paintCursor(el);
   reveal(el, jump);
-  if (jump) land(el);
+  if (jump) land(ring ?? el);
 }
 
 let landing: HTMLDivElement | null = null;
@@ -155,7 +193,15 @@ function land(el: Element) {
   landing.className = "art-landing";
   landing.setAttribute("aria-hidden", "true");
   landing.setAttribute("data-print", "hide");
-  Object.assign(landing.style, { top: `${r.top + scrollY}px`, left: `${r.left + scrollX}px`, width: `${r.width}px`, height: `${r.height}px` });
+  // The halo takes the ringed box's corners (a card's 12px, a paragraph's 6px).
+  const corners = getComputedStyle(el).borderRadius;
+  Object.assign(landing.style, {
+    top: `${r.top + scrollY}px`,
+    left: `${r.left + scrollX}px`,
+    width: `${r.width}px`,
+    height: `${r.height}px`,
+    borderRadius: parseFloat(corners) ? corners : "6px",
+  });
   const mine = landing;
   mine.addEventListener("animationend", () => mine.remove(), { once: true });
   document.body.append(mine);
@@ -214,6 +260,22 @@ function half(dir: 1 | -1, n: number) {
     if (d < gap) [best, gap] = [el, d];
   }
   if (best !== cursor) setCursor(best);
+}
+
+const scrollsSideways = (el: Element) => /(auto|scroll)/.test(getComputedStyle(el).overflowX) && el.scrollWidth > el.clientWidth + 1;
+
+/** h and l: scroll what's wide at the cursor (a table's scroller, a code block, a wide diagram) sideways. */
+function sideways(dir: 1 | -1, n: number) {
+  const el = current();
+  if (!el) return;
+  let box: Element | null = null;
+  for (let up: Element | null = el; up && up !== keysRoot() && !box; up = up.parentElement) if (scrollsSideways(up)) box = up;
+  box ??= [...el.querySelectorAll("*")].find(scrollsSideways) ?? null;
+  if (!box) return note("Nothing here scrolls sideways");
+  const by = Math.max(80, box.clientWidth / 3) * n * dir;
+  const was = box.scrollLeft;
+  box.scrollBy({ left: by, behavior: "instant" });
+  if (box.scrollLeft === was) note(dir > 0 ? "At the right edge" : "At the left edge");
 }
 
 function scrollEnd(dir: 1 | -1) {
