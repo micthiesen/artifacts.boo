@@ -280,8 +280,15 @@ onKey("up", (n) => {
   const at = focusedRow();
   return focusRow(at < 0 ? 0 : at - n);
 });
-onKey("top", () => focusRow(0));
-onKey("bottom", () => focusRow(rows().length - 1));
+// g g and G go to the very top and bottom of the page, past the title and search, as in an artifact.
+onKey("top", () => {
+  if (focusRow(0) === false) return false;
+  scrollTo({ top: 0, behavior: "instant" });
+});
+onKey("bottom", () => {
+  if (focusRow(rows().length - 1) === false) return false;
+  scrollTo({ top: document.documentElement.scrollHeight, behavior: "instant" });
+});
 onKey("open", () => {
   const link = rowLink(rows()[focusedRow()]);
   if (!link) return false;

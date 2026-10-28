@@ -139,6 +139,14 @@ select, input, textarea { max-width: 100%; }
   background: var(--border);
 }
 .shell .bar { background: var(--bg); }
+/* On pages that scroll as a whole (lists, settings, inbox, policies), the bar stays at the top. It carries the
+   page's top glow, placed as the page's is, so at the top it looks no different from the page around it. The
+   body grows with its content instead of being one screen tall, or the bar would let go after a screen.
+   The splash page keeps its bar in place, over its own design. */
+body:has(> .bar):not(:has(> main.splash)) { height: auto; min-height: 100%; }
+body:not(:has(> main.splash)) > .bar { position: sticky; top: 0; z-index: 30; background: var(--glow) no-repeat, var(--bg); }
+/* Anything scrolled into view (a section link, a row the keys moved to) lands below the bar. :has can't nest. */
+html:has(> body > .bar):not(:has(> body > main.splash)) { scroll-padding-top: 3.5rem; }
 /* Logo + title: identical on every page. */
 .bar .lead { flex: 1; display: flex; align-items: center; gap: .6rem; min-width: 0; }
 .bar .mark {
