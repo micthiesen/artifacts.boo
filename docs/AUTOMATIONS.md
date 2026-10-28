@@ -22,7 +22,7 @@ The MCP server speaks protocol `2026-07-28` and offers the
 
 | Event | Fires when | Arguments |
 |---|---|---|
-| `artifact.answered` | Someone approves or requests changes, sends or changes a form response, or votes | `artifact` (one artifact id), `component` (`approval`, `form` or `poll`) |
+| `artifact.answered` | Someone approves or requests changes, sends or changes a form response, votes, or makes or changes a Decision | `artifact` (one artifact id), `component` (`approval`, `form`, `poll` or `decision`) |
 | `comment.created` | Someone starts a comment thread, replies, or writes in a Comments block | `artifact` |
 
 Agents' own comments and changes never fire an event, so an agent can't

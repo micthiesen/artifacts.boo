@@ -1,0 +1,63 @@
+# Stepped diagrams
+
+How a write reaches viewers, a part at a time.
+
+<Diagram
+  title="A write, step by step"
+  code={`flowchart TD
+  agent[Agent] -->|write| compile{Compile}
+  compile -- errors --> agent
+  compile -- ok --> store[(Storage)]
+  subgraph frame[Reader's frame]
+    kit[Kit runtime] --> page[Page]
+  end
+  store --> kit
+  page --> check[Render check]:::changed`}
+  steps={[
+    { focus: "agent compile", title: "The agent writes", text: "The agent sends files; the Worker compiles them and returns errors with line numbers." },
+    { focus: "compile store", title: "It is stored", text: "A clean compile is saved as a new version." },
+    { focus: "frame", title: "Readers see it", text: "The kit runtime in each reader's frame draws the page." },
+    { focus: "page check", text: "The render check loads the page like a reader would and reports what broke." },
+  ]}
+/>
+
+## Collapsed group
+
+```mermaid
+flowchart TD
+  a[Request] --> b[Router]
+  subgraph auth[Auth: 5 steps]
+    c[Cookie] --> d[Session] --> e[Role] --> f[Policy] --> g[Audit]
+  end
+  auth@{ view: collapsed }
+  b --> c
+  g --> h[Handler]
+```
+
+## Dense, so it zooms
+
+```mermaid
+flowchart LR
+  hub[Dispatcher] --> a1[Billing worker] & a2[Search indexer] & a3[Thumbnail maker] & a4[Mailer queue] & a5[Webhook sender]
+  a1 --> b1[Ledger database] --> c1[Monthly statement]
+  a2 --> b2[Search cluster] --> c2[Reader results]
+  a3 --> b3[Image bucket] --> c3[Gallery page]
+  a4 --> b4[Mail provider] --> c4[Inbox]
+  a5 --> b5[Partner endpoint] --> c5[Partner dashboard]
+```
+
+## Class members in monospace
+
+```mermaid
+classDiagram
+  class Artifact {
+    +String id
+    +number version
+    +write(files) Result
+  }
+  class Workspace {
+    +String slug
+    +list() Artifact[]
+  }
+  Workspace --> Artifact
+```

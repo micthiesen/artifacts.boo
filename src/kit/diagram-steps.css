@@ -1,0 +1,67 @@
+/* Diagrams (<Diagram>, src/kit/ui/diagram-impl.tsx): Pele's zoom, and stepped diagrams.
+
+   Zoom. Pele adds zoom to a diagram scaled down to fit its card: + and − buttons (and a reset once zoomed),
+   pinch, Ctrl or ⌘ with the wheel or trackpad, double-click, and +, −, 0 and the arrows while the drawing has
+   focus. The buttons are always there when zoom is (nothing hover-only), stacked in the corner so the drawing
+   gives up as little width as possible (Pele narrows it when they would cover text). They are 24 px, which is
+   the floor, so they don't grow a hit area into each other. */
+.art-diagram > .pele.pele-zoom {
+  flex-direction: column !important;
+  opacity: 1;
+  z-index: 1;
+  box-shadow: var(--shadow-pop);
+}
+.art-diagram > .pele-zoom button {
+  transition: background-color var(--motion-fast) var(--motion-ease);
+}
+.art-diagram > .pele-zoom button:not(:disabled):hover {
+  background: var(--muted) !important;
+}
+.art-diagram > .pele-zoom button:not(:disabled):active {
+  background: color-mix(in oklab, var(--input) 45%, var(--card)) !important;
+}
+.art-diagram > .pele-zoom button:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 1px;
+}
+/* A zoomable drawing takes keyboard focus (Pele sets tabindex); it shows the ring only for the keyboard. */
+.art-diagram svg.pele[tabindex]:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+/* Pele claims every touch once zoomed in, so a phone's swipe down the page would pan the drawing and stop
+   there. Leave vertical swipes to the page: one finger sideways pans, two fingers pinch and pan any way. */
+.art-diagram svg.pele[tabindex] {
+  touch-action: pan-y !important;
+}
+@media print {
+  .art-diagram .pele-zoom {
+    display: none !important;
+  }
+}
+
+/* Stepped diagrams: a step lights its nodes in your light (you are walking it) and fades the rest back
+   (kit.css `.art-dim`); an edge between two lit nodes lights with them. Changing step only changes colour,
+   quickly. A node marked added / changed / removed keeps its mark's colour, and its edges theirs. */
+.art-diagram[data-steps] .pele-node > *,
+.art-diagram[data-steps] :is(.pele-edge, .pele-edge-label),
+.art-diagram[data-steps] .pele-cluster > rect {
+  transition:
+    opacity var(--motion-fast) var(--motion-ease),
+    stroke var(--motion-fast) var(--motion-ease),
+    fill var(--motion-fast) var(--motion-ease);
+}
+.art-diagram[data-steps] .pele-node.art-lit:not(.added, .changed, .removed) > :is(rect, polygon, path, circle, ellipse) {
+  stroke: var(--primary);
+  stroke-width: 2px;
+}
+.art-diagram[data-steps] .pele-edge.art-lit:not(.added, .removed) {
+  stroke: var(--primary);
+}
+.art-diagram[data-steps] .pele-edge.art-lit:not(.added, .removed) .pele-marker {
+  fill: var(--primary);
+}
+.art-diagram[data-steps] .pele-cluster.art-lit > rect {
+  stroke: var(--primary);
+}

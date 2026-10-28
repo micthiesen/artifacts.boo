@@ -13,7 +13,10 @@ import type { JsonValue } from "../shared/protocol.ts";
 import kitExports from "./kit-exports.json";
 import { remarkBlockIds, type BlockInfo } from "./blocks.ts";
 import { checkMermaid, mermaidNodeIds, mermaidWidth, remarkMermaid, type MermaidBlock } from "./mermaid.ts";
-import { checkChangeGuide } from "../shared/change-guide.ts";
+import { checkChangeGuide, mapKind } from "../shared/change-guide.ts";
+import { checkSources } from "../shared/sources.ts";
+import { checkShortlist } from "../shared/shortlist.ts";
+import { checkFindings, findingsQuadrant, rankFindings, type FindingsData } from "../shared/findings.ts";
 
 export const ALLOWED_IMPORTS = new Set([
   "react",
@@ -331,6 +334,11 @@ export async function buildArtifact(files: Record<string, string>): Promise<{ bu
     imports[ART_PREFIX + path] = `data:text/javascript;base64,${toBase64(code)}`;
   }
   errors.push(...(await changeGuideErrors(files, data)));
+  errors.push(...shortlistErrors(files, data));
+  errors.push(...decisionErrors(files));
+  errors.push(...(await findingsErrors(files, data)));
+  const sources = sourcesErrors(files, data);
+  errors.push(...sources.errors);
   if (errors.length) return { errors };
 
   let css: string;
@@ -340,7 +348,7 @@ export async function buildArtifact(files: Record<string, string>): Promise<{ bu
     return { errors: [{ path: "", message: `stylesheet: ${(err as Error).message}` }] };
   }
   const code = Object.fromEntries(paths.filter((p) => !p.startsWith("data/")).map((p) => [p, files[p]]));
-  const warnings = [...phoneWidthWarnings(candidates, code), ...dataWarnings(code, data)];
+  const warnings = [...phoneWidthWarnings(candidates, code), ...dataWarnings(code, data), ...sources.warnings];
   return { build: { entry: ART_PREFIX + entries[0], imports, css, data, blocks, stamp: BUILD_STAMP }, errors: [], ...(warnings.length ? { warnings } : {}) };
 }
 
@@ -354,22 +362,165 @@ function dataPath(name: string): string {
   return p.startsWith("data/") ? p : `data/${p}`;
 }
 
+/**
+ * Page files as code, without what only mentions a tag: fences and inline code in MDX, comments in TSX.
+ */
+function pageCode(files: Record<string, string>): string[] {
+  return Object.entries(files)
+    .filter(([path]) => /\.(mdx|tsx|jsx)$/.test(path))
+    .map(([path, source]) =>
+      path.endsWith(".mdx")
+        ? source.replace(/^(```|~~~)[\s\S]*?^\1/gm, "").replace(/`[^`\n]*`/g, "")
+        : source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(?<![:"'`\w\\])\/\/[^\n]*/g, ""),
+    );
+}
+
+/**
+ * The attribute text of every use of the kit component `name` across the page files. A file that declares
+ * its own `name`, or imports one from somewhere other than the kit, is using that instead, so it's skipped.
+ * Attributes are read with quotes and braces in mind, so `onPick={() => go()}` doesn't end the tag early.
+ */
+function kitTags(files: Record<string, string>, name: string): string[] {
+  const own = new RegExp(`\\b(?:function|const|let|var|class)\\s+${name}\\b|\\bimport\\s+${name}\\b|\\bimport\\s*\\{[^}]*\\b${name}\\b[^}]*\\}\\s*from\\s*["'](?!@a/ui["'])`);
+  const out: string[] = [];
+  for (const code of pageCode(files)) {
+    if (own.test(code)) continue;
+    for (const m of code.matchAll(new RegExp(`<${name}(?![\\w.])`, "g"))) {
+      let depth = 0;
+      let quote = "";
+      let i = m.index! + m[0].length;
+      for (; i < code.length; i++) {
+        const ch = code[i]!;
+        if (quote) {
+          if (ch === quote && code[i - 1] !== "\\") quote = "";
+        } else if (ch === '"' || ch === "'" || (ch === "`" && depth > 0)) quote = ch;
+        else if (ch === "{") depth++;
+        else if (ch === "}") depth = Math.max(0, depth - 1);
+        else if (ch === ">" && depth === 0) break;
+      }
+      out.push(code.slice(m.index! + m[0].length, i));
+    }
+  }
+  return out;
+}
+
+/** The data files a recipe component reads: its literal `data` prop, or its default when it has none. A data prop
+ * computed in code (or possibly inside a spread) can't be checked here. */
+function recipeFiles(files: Record<string, string>, tag: string, fallback: string): Set<string> {
+  const named = new Set<string>();
+  for (const attrs of kitTags(files, tag)) {
+    const computed = /(?<![\w-])data=/.test(attrs) || /\{\s*\.\.\./.test(attrs);
+    const name = literalProp(attrs, "data") ?? (computed ? null : fallback);
+    if (name) named.add(dataPath(name));
+  }
+  return named;
+}
+
+/**
+ * A <Shortlist> that recommends an option it doesn't list, cites nothing for one it keeps or carries an
+ * impossible date would mislead the reader, so it isn't saved.
+ */
+function shortlistErrors(files: Record<string, string>, data: Record<string, JsonValue>): CompileError[] {
+  const errors: CompileError[] = [];
+  const now = new Date();
+  for (const path of recipeFiles(files, "Shortlist", "shortlist.json")) {
+    if (!(path in data)) {
+      errors.push({ path, message: `<Shortlist> reads ${path}, which doesn't exist: add it (see artifact_guide topic "shortlist")` });
+      continue;
+    }
+    for (const message of checkShortlist(data[path], now)) errors.push({ path, message });
+  }
+  return errors;
+}
+
+/**
+ * A <Findings> page whose data has an unknown level, a missing benefit or an inventory pointing at no file would
+ * show wrong, so it isn't saved. Its generated impact-against-effort chart is checked like any ```mermaid fence.
+ */
+async function findingsErrors(files: Record<string, string>, data: Record<string, JsonValue>): Promise<CompileError[]> {
+  const errors: CompileError[] = [];
+  for (const path of recipeFiles(files, "Findings", "findings.json")) {
+    if (!(path in data)) {
+      errors.push({ path, message: `<Findings> reads ${path}, which doesn't exist: add it (see artifact_guide topic "findings")` });
+      continue;
+    }
+    const problems = checkFindings(data[path], Object.keys(data));
+    errors.push(...problems.map((message) => ({ path, message })));
+    if (problems.length) continue;
+    const chart = findingsQuadrant(rankFindings((data[path] as unknown as FindingsData).findings));
+    for (const e of await checkMermaid(path, [{ code: chart, line: 0 }])) errors.push({ path, message: `the impact-against-effort chart drawn from "findings" doesn't parse (${e.message}): simplify the titles` });
+  }
+  return errors;
+}
+
+/**
+ * The server holds a <Decision> to its `deciders` by reading them from the page's source, so they must be
+ * written there as literal emails: a list built in code would let anyone with edit access decide.
+ */
+function decisionErrors(files: Record<string, string>): CompileError[] {
+  const errors: CompileError[] = [];
+  for (const attrs of kitTags(files, "Decision")) {
+    const at = attrs.search(/(?<![\w-])deciders=/);
+    if (at < 0) continue;
+    const list = /^deciders\s*=\s*\{\s*\[\s*((?:(?:"[^"]*"|'[^']*')\s*,?\s*)*)\]\s*\}/.exec(attrs.slice(at));
+    // At least one email, or nobody could ever decide (and the page would say it's waiting).
+    if (!list || !/["'][^"'\s]+@[^"'\s]+["']/.test(list[1]!)) {
+      errors.push({ path: "", message: `<Decision deciders> must list emails literally, like deciders={["sam@example.com"]}: the server reads them from the page to decide who may answer` });
+    }
+  }
+  return errors;
+}
+
+/** A literal prop on a tag's attribute text: name="x", name='x' or name={"x"}. */
+function literalProp(attrs: string, name: string): string | undefined {
+  // Not inside a hyphenated name: data-id= isn't id=.
+  return new RegExp(`(?<![\\w-])${name}=\\{?\\s*["']([^"']+)["']`).exec(attrs)?.[1];
+}
+
+/**
+ * <Sources> and <Cite> read a sources file: it must exist and be well formed, and a <Cite id> must name a
+ * source in it (a citation that points nowhere would show a bare error marker). Citations into a file no
+ * <Sources> on the page lists save, with a warning: their links have nothing to land on.
+ */
+function sourcesErrors(files: Record<string, string>, data: Record<string, JsonValue>): { errors: CompileError[]; warnings: string[] } {
+  const errors: CompileError[] = [];
+  const warnings: string[] = [];
+  const listed = new Set<string>();
+  const cites = new Map<string, Set<string>>();
+  for (const attrs of kitTags(files, "Sources")) {
+    const file = literalProp(attrs, "data") ?? (/(?<![\w-])data=|\{\s*\.\.\./.test(attrs) ? null : "sources.json");
+    if (file) listed.add(dataPath(file));
+  }
+  for (const attrs of kitTags(files, "Cite")) {
+    const id = literalProp(attrs, "id");
+    const file = literalProp(attrs, "data") ?? (/(?<![\w-])data=|\{\s*\.\.\./.test(attrs) ? null : "sources.json");
+    // A computed id or file can't be checked here; the citation shows its own marker if it's wrong.
+    if (!id || !file) continue;
+    const path = dataPath(file);
+    if (!cites.has(path)) cites.set(path, new Set());
+    cites.get(path)!.add(id);
+  }
+  for (const file of new Set([...listed, ...cites.keys()])) {
+    if (!(file in data)) {
+      errors.push({ path: file, message: `<Sources>/<Cite> read ${file}, which doesn't exist: add a list of {id, title, url?, checked?, kind?, note?}` });
+      continue;
+    }
+    const problems = checkSources(data[file]);
+    errors.push(...problems.map((message) => ({ path: file, message })));
+    if (problems.length) continue;
+    const ids = new Set((data[file] as { id: string }[]).map((s) => s.id));
+    for (const id of cites.get(file) ?? []) if (!ids.has(id)) errors.push({ path: file, message: `<Cite id="${id}"> names no source in ${file}: add it there or fix the id` });
+    if (cites.has(file) && !listed.has(file)) warnings.push(`<Cite> links into ${file}, but no <Sources data="${file}"> on the page lists it, so the links go nowhere`);
+  }
+  return { errors, warnings };
+}
+
 /** A guide's map is scaled to a phone's column (about 320 px); past this its 16 px labels drop under 10 px. */
 const GUIDE_MAP_MAX_PX = 520;
 
 async function changeGuideErrors(files: Record<string, string>, data: Record<string, JsonValue>): Promise<CompileError[]> {
   const errors: CompileError[] = [];
-  const named = new Set<string>();
-  for (const [path, source] of Object.entries(files)) {
-    if (!/\.(mdx|tsx|jsx)$/.test(path)) continue;
-    // Code samples that mention <ChangeGuide> (in fences or backticks) aren't uses of it.
-    const code = path.endsWith(".mdx") ? source.replace(/^(```|~~~)[\s\S]*?^\1/gm, "").replace(/`[^`\n]*`/g, "") : source;
-    for (const m of code.matchAll(/<ChangeGuide\b([^>]*)>/g)) {
-      const name = /\bdata=\{?\s*["']([^"']+)["']/.exec(m[1])?.[1] ?? (/\bdata=/.test(m[1]) ? null : "guide.json");
-      if (name) named.add(dataPath(name));
-    }
-  }
-  for (const path of named) {
+  for (const path of recipeFiles(files, "ChangeGuide", "guide.json")) {
     if (!(path in data)) {
       errors.push({ path, message: `<ChangeGuide> reads ${path}, which doesn't exist: add it (see artifact_guide topic "change")` });
       continue;
@@ -383,16 +534,20 @@ async function changeGuideErrors(files: Record<string, string>, data: Record<str
         continue;
       }
       // Readers are on phones: a wide picture shrinks its labels below what anyone can read there.
-      if (!/^\s*flowchart\s+(TD|TB)\b/.test(map)) errors.push({ path, message: `"map" is a top-down flowchart: start it with \`flowchart TD\`` });
+      if (!mapKind(map)) errors.push({ path, message: `"map" is a top-down flowchart or a request flow: start it with \`flowchart TD\` or \`sequenceDiagram\`` });
       const width = await mermaidWidth(map);
       if (width && width > GUIDE_MAP_MAX_PX) {
-        errors.push({ path, message: `"map" draws ${Math.round(width)} px wide; on a phone its labels would shrink below 10 px. Keep it under ${GUIDE_MAP_MAX_PX}: at most 2 nodes side by side, labels of 2 to 4 words` });
+        const advice = mapKind(map) === "sequence" ? "at most 3 participants, short message labels" : "at most 2 nodes side by side, labels of 2 to 4 words";
+        errors.push({ path, message: `"map" draws ${Math.round(width)} px wide; on a phone its labels would shrink below 10 px. Keep it under ${GUIDE_MAP_MAX_PX}: ${advice}` });
       }
     }
     for (const message of checkChangeGuide(guide, map ? await mermaidNodeIds(map) : undefined)) errors.push({ path, message });
   }
   return errors;
 }
+
+/** Data files kit components read when given no `data` prop. */
+const DEFAULT_DATA: Record<string, string> = { "sources.json": "(?:Sources|Cite)", "log.json": "Log", "guide.json": "ChangeGuide", "shortlist.json": "Shortlist", "findings.json": "Findings" };
 
 /**
  * Mistakes that save fine but show wrong, most often after an import: a Table naming columns its data doesn't
@@ -410,8 +565,15 @@ export function dataWarnings(code: Record<string, string>, data: Record<string, 
     const tabled = new RegExp(`<Table\\b[^>]*\\bdata=["'](data/)?${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}["']`).test(source);
     if (tabled && /"__(YES|NO)__"/.test(json)) out.push(`${path} has Notion's "__YES__"/"__NO__" placeholders, shown literally: use true/false`);
     if (tabled && /"[^"]*\*\*[^"*]+\*\*[^"]*"/.test(json)) out.push(`${path} has **markdown** inside values, which a Table shows literally: keep values plain`);
-    // Only when every useData() names its file literally; a computed name could be using this one.
-    if (!source.includes(name) && !source.includes(path) && !dynamicData) out.push(`${path} isn't used by any page file: show it (say, in a Table) or delete it`);
+    // Only when every useData() names its file literally; a computed name could be using this one. A component
+    // with no data prop reads its default file (<Sources /> reads sources.json).
+    const byDefault = Object.entries(DEFAULT_DATA).some(([file, tag]) => file === name && new RegExp(`<${tag}\\b(?![^>]*\\bdata=)`).test(source));
+    // A <Findings> file names its inventory's rows in "inventory.data".
+    const inventory = Object.values(data).some((v) => {
+      const inv = v && typeof v === "object" && !Array.isArray(v) ? (v as { inventory?: { data?: unknown } }).inventory : undefined;
+      return typeof inv?.data === "string" && dataPath(inv.data) === path;
+    });
+    if (!byDefault && !inventory && !source.includes(name) && !source.includes(path) && !dynamicData) out.push(`${path} isn't used by any page file: show it (say, in a Table) or delete it`);
   }
   // <Table data="x.json" columns="a b c" />: names the data has in no case at all.
   for (const m of source.matchAll(/<Table\b[^>]*?\bdata=["']([^"']+)["'][^>]*?\bcolumns=["']([^"']+)["']/g)) {
@@ -420,6 +582,15 @@ export function dataWarnings(code: Record<string, string>, data: Record<string, 
     const keys = new Set(rows.slice(0, 50).flatMap((r) => (r && typeof r === "object" && !Array.isArray(r) ? Object.keys(r).map((k) => k.toLowerCase()) : [])));
     const missing = m[2].split(/[\s,]+/).filter((c) => c && !keys.has(c.toLowerCase()));
     if (missing.length) out.push(`Table data="${m[1]}" names columns its rows don't have (${missing.join(", ")}): every cell in them shows —`);
+  }
+  // A Notes box whose placeholder lists fields ("Date; amount; rest time…", "Date / Project / Worked on") is a log
+  // kept as free text: people end up writing rows by hand that a Ledger would keep, sort and total.
+  for (const m of source.matchAll(/<Notes\b[^>]*?\bplaceholder=(?:"([^"]*)"|'([^']*)'|\{["'`]([^"'`]*)["'`]\})/g)) {
+    const placeholder = m[1] ?? m[2] ?? m[3] ?? "";
+    const fields = placeholder.split(/\s*[;/|·]\s*|\s*,\s*(?=\p{Lu})/u).filter((f) => f.trim());
+    if (fields.length >= 3 && fields.some((f) => /^(date|when)\b/i.test(f.trim()))) {
+      out.push(`A Notes box asks for fields (${fields.slice(0, 4).join(", ")}${fields.length > 4 ? ", …" : ""}): that's a log; a Ledger with those fields keeps each entry as a row people add, edit and sort`);
+    }
   }
   return out;
 }

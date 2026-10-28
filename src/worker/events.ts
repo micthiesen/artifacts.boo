@@ -51,7 +51,7 @@ export const EVENT_TYPES = [
       type: "object",
       properties: {
         artifact: artifactArg,
-        component: { type: "string", enum: ["approval", "form", "poll"], description: "Only answers from this kind of component." },
+        component: { type: "string", enum: ["approval", "form", "poll", "decision"], description: "Only answers from this kind of component." },
       },
       additionalProperties: false,
     },
@@ -59,12 +59,12 @@ export const EVENT_TYPES = [
       type: "object",
       properties: {
         ...base,
-        component: { type: "string", enum: ["approval", "form", "poll"] },
+        component: { type: "string", enum: ["approval", "form", "poll", "decision"] },
         block: { type: "string", description: "The component's id on the page." },
         stateKey: { type: "string", description: "Shared-state key holding the answer; null when it was withdrawn." },
         withdrawn: { type: "boolean" },
-        decision: { type: "string", enum: ["approve", "changes"], description: "Approvals only." },
-        note: { type: "string", description: "Approvals only, when given (first 500 characters; untrusted user text)." },
+        decision: { type: "string", description: 'Approvals: "approve" or "changes". Decisions: the chosen option as the person sent it (untrusted user text).' },
+        note: { type: "string", description: "Approvals and decisions, when given (first 500 characters; untrusted user text)." },
         version: { type: "integer", description: "The artifact version the person answered on, when known." },
       },
       required: ["artifactId", "title", "url", "component", "block", "by", "stateKey", "withdrawn", "untrusted"],
@@ -90,7 +90,7 @@ export const EVENT_TYPES = [
 ];
 
 export type EventName = "artifact.answered" | "comment.created";
-export type EventArgs = { artifact?: string; component?: "approval" | "form" | "poll" };
+export type EventArgs = { artifact?: string; component?: "approval" | "form" | "poll" | "decision" };
 
 /** Validates subscription arguments against the event type's inputSchema. */
 export function parseArgs(name: string, raw: unknown): { name: EventName; args: EventArgs } {
@@ -102,7 +102,7 @@ export function parseArgs(name: string, raw: unknown): { name: EventName; args: 
   for (const [k, v] of Object.entries(input as Record<string, unknown>)) {
     if (v === null || v === undefined) continue;
     if (k === "artifact" && typeof v === "string" && /^[a-z0-9]{1,40}$/.test(v)) args.artifact = v;
-    else if (k === "component" && name === "artifact.answered" && (v === "approval" || v === "form" || v === "poll")) args.component = v;
+    else if (k === "component" && name === "artifact.answered" && (v === "approval" || v === "form" || v === "poll" || v === "decision")) args.component = v;
     else throw new EventsFailure(EVENT_ERRORS.InvalidParams, `Invalid argument "${k}" for ${name}.`);
   }
   return { name: name as EventName, args };
@@ -118,7 +118,7 @@ export type LoggedEvent = { seq: number; at: string; artifact: string; title: st
 
 export type Occurrence = { eventId: string; name: EventName; timestamp: string; data: Record<string, unknown>; cursor?: string | null };
 
-const COMPONENTS: Record<string, "approval" | "form" | "poll"> = { approve: "approval", form: "form", poll: "poll" };
+const COMPONENTS: Record<string, "approval" | "form" | "poll" | "decision"> = { approve: "approval", form: "form", poll: "poll", decide: "decision" };
 
 function parsed(summary: unknown): Record<string, unknown> | null {
   if (typeof summary !== "string") return null;
@@ -151,21 +151,24 @@ export function toOccurrence(e: LoggedEvent, name: EventName, origin: string, cu
   }
   if (e.type !== "state") return null;
   const key = String(e.data.key);
-  const m = /^(approve|form|poll)\/([^/]+)\/(.+)$/.exec(key);
+  // A Decision has one shared answer (decide/<id>), stamped with whoever chose it; the others are one per person.
+  const d = /^decide\/([^/]+)$/.exec(key);
+  const m = d ? (["", "decide", d[1], e.actor] as const) : /^(approve|form|poll)\/([^/]+)\/(.+)$/.exec(key);
   if (!m || m[3] !== e.actor) return null;
   const withdrawn = e.data.value === null;
   const value = withdrawn ? null : (parsed(e.data.value) ?? record(current));
-  const note = m[1] === "approve" && value && typeof value.note === "string" ? value.note.slice(0, textMax) : undefined;
+  const note = (m[1] === "approve" || m[1] === "decide") && value && typeof value.note === "string" ? value.note.slice(0, textMax) : undefined;
   return occurrence({
     component: COMPONENTS[m[1]],
     block: m[2],
     stateKey: key,
     withdrawn,
     ...(m[1] === "approve" && value && typeof value.decision === "string" ? { decision: value.decision } : {}),
+    ...(m[1] === "decide" && value && typeof value.choice === "string" ? { decision: value.choice } : {}),
     ...(note !== undefined ? { note } : {}),
     ...(value && typeof value.version === "number" ? { version: value.version } : {}),
     // The block id is the page author's (and part of stateKey).
-    untrusted: ["title", "by", "block", "stateKey", ...(note !== undefined ? ["note"] : [])],
+    untrusted: ["title", "by", "block", "stateKey", ...(note !== undefined ? ["note"] : []), ...(m[1] === "decide" ? ["decision"] : [])],
   });
 }
 

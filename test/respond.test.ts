@@ -93,6 +93,17 @@ test("webhooks carry the artifact and each event for automations", async () => {
   expect(body.events.find((e: { kind: string }) => e.kind === "comment")).toMatchObject({ by: DANA, text: "Is the date firm?", why: "all" });
 });
 
+test("a Decision's answer reaches the owner like an approval", async () => {
+  const id = await make();
+  await h.directory.addChannel(OWNER, "webhook", { url: "https://hooks.example.net/agent" }, "webhook");
+  h.hub.setState(id, { "decide/launch": { choice: "Thursday", note: "after the load test" } }, SAM, undefined, { origin: ORIGIN });
+  const out = await deliver();
+  const body = JSON.parse(String(out[0].init.body));
+  expect(body.events.find((e: { kind: string }) => e.kind === "response")).toEqual({
+    kind: "response", component: "decision", block: "launch", decision: "Thursday", note: "after the load test", changed: false, by: SAM,
+  });
+});
+
 test("readers: who opened which version, without the owner or people who lost access", async () => {
   const id = await make();
   h.hub.visit(id, OWNER);

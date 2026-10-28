@@ -77,3 +77,17 @@ test("money: only US dollars are a bare $; several links in one cell are each li
   expect([...container.querySelectorAll("tbody a")].map((a) => a.textContent)).toEqual(["#966", "#1171"]);
   root.unmount();
 });
+
+test("cardTitle picks the column that titles each card; labels wrap instead of being cut off", async () => {
+  const container = document.createElement("div");
+  document.body.append(container);
+  const rows = [{ id: 7, place: "Harbour walk", "Walking estimate": "25 min", cost: 0 }];
+  const root = createRoot(container);
+  await act(async () => root.render(<Table data={rows} cards="always" cardTitle="Place" />));
+  const card = container.querySelector("li")!;
+  expect(card.firstElementChild?.textContent).toBe("Harbour walk");
+  const labels = [...card.querySelectorAll("dt")];
+  expect(labels.map((d) => d.textContent)).toEqual(["ID", "Walking estimate", "Cost"]);
+  expect(labels.some((d) => d.className.includes("truncate"))).toBe(false);
+  root.unmount();
+});

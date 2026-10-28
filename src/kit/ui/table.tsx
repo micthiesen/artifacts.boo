@@ -175,6 +175,8 @@ export type TableProps = {
    * phones when there are more than three columns, "always", or "never" (a table that scrolls sideways).
    */
   cards?: "auto" | "always" | "never";
+  /** The column each card is titled by (default: the first). It isn't repeated among the card's labels. */
+  cardTitle?: string;
   className?: string;
 };
 
@@ -206,7 +208,7 @@ export function Table(props: TableProps) {
   );
 }
 
-function TableInner({ data, columns, sort, search, empty = "Nothing here yet.", limit, cards = "auto", className }: TableProps) {
+function TableInner({ data, columns, sort, search, empty = "Nothing here yet.", limit, cards = "auto", cardTitle, className }: TableProps) {
   const rows = useRows(data);
   const phone = usePhone();
   const cols = React.useMemo(
@@ -250,6 +252,8 @@ function TableInner({ data, columns, sort, search, empty = "Nothing here yet.", 
 
   const alignClass = (a: string) => (a === "right" ? "text-right" : a === "center" ? "text-center" : "text-left");
   const asCards = cards === "always" || (cards === "auto" && phone && cols.length > 3);
+  // Named in any case, like columns; an unknown name falls back to the first column.
+  const titleCol = (cardTitle && cols.find((c) => c.key === cardTitle || c.key.toLowerCase() === cardTitle.toLowerCase())) || cols[0];
 
   return (
     <div className={cn("my-6", className)}>
@@ -289,12 +293,12 @@ function TableInner({ data, columns, sort, search, empty = "Nothing here yet.", 
                 data-row={cols[0] ? String(r[cols[0].key] ?? "").slice(0, 200) : undefined}
                 className="rounded-xl border border-border bg-card px-4 py-3 text-[14px] leading-snug shadow-card"
               >
-                {cols[0] && <div className="mb-1.5 font-medium text-foreground">{formatValue(r[cols[0].key], cols[0].format, r)}</div>}
+                {titleCol && <div className="mb-1.5 font-medium text-foreground">{formatValue(r[titleCol.key], titleCol.format, r)}</div>}
                 <dl className="grid grid-cols-[minmax(0,0.9fr)_minmax(0,1.6fr)] gap-x-3 gap-y-1">
-                  {cols.slice(1).map((c) =>
+                  {cols.filter((c) => c !== titleCol).map((c) =>
                     r[c.key] === null || r[c.key] === undefined || r[c.key] === "" ? null : (
                       <React.Fragment key={c.key}>
-                        <dt className="truncate text-muted-foreground">{c.label ?? humanize(c.key)}</dt>
+                        <dt className="min-w-0 break-words text-muted-foreground">{c.label ?? humanize(c.key)}</dt>
                         <dd className="min-w-0 break-words">{formatValue(r[c.key], c.format, r)}</dd>
                       </React.Fragment>
                     ),

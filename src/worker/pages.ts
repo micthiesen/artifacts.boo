@@ -796,7 +796,7 @@ ${
 <h2>Isolation</h2>
 <ul>
 <li>Each workspace is its own Cloudflare Durable Object with its own SQLite database, served from its own subdomain, so browser cookies and storage are separated by origin too.</li>
-<li>Artifact code is treated as untrusted. It runs in a sandboxed, opaque-origin frame that can't make network requests or open popups; links that leave the workspace ask first. Storage, shared state and comments reach it only through the page around it, scoped to that one artifact. A frame that tries to navigate itself elsewhere is replaced.</li>
+<li>Artifact code is treated as untrusted. It runs in a sandboxed, opaque-origin frame that can't make network requests or open popups; a link that leaves the workspace asks the first time for each site, per workspace and device (and again when it carries a long query that could hide what the page read). Storage, shared state and comments reach it only through the page around it, scoped to that one artifact. A frame that tries to navigate itself elsewhere is replaced.</li>
 <li>Comments are drawn outside the frame, and votes, comments and checklist ticks are stamped with the verified signed-in email on the server, so artifact code can't forge them.</li>
 </ul>
 <h2>Sign-in and access</h2>

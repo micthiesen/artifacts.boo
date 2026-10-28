@@ -580,11 +580,37 @@ function renderPresence() {
 connect();
 
 /**
- * Open a link the artifact asked for. Artifact code is untrusted and a URL can
- * carry whatever it read (your email, shared state), so leaving the site asks
- * first, once per host per page view; links within this site just open.
+ * Open a link the artifact asked for. Artifact code is untrusted and a URL can carry whatever it read (your
+ * email, shared state), so leaving the site asks first; links within this site just open. A site you've said
+ * yes to is remembered in this workspace on this device (this origin's storage), so links to it (GitHub's, with their #L12 and ?tab=) stop asking. A
+ * long link to it (where something read from the page could hide, in its path, query or fragment) still
+ * asks, in full. This deployment's own sites (the apex and every workspace) are never remembered: their
+ * sign-in, consent and billing pages could act on the viewer, so links there ask every time.
  */
-const allowedHosts = new Set<string>();
+const TRUSTED_KEY = "art:trusted-sites";
+const TRUSTED_MAX = 100;
+const CARRIES_A_LOT = 240;
+const apexHost = new URL(boot.apex).hostname;
+const ourSite = (host: string) => host === apexHost || host.endsWith(`.${apexHost}`);
+function trustedSites(): string[] {
+  try {
+    const v = JSON.parse(localStorage.getItem(TRUSTED_KEY) ?? "[]");
+    return Array.isArray(v) ? v.filter((h): h is string => typeof h === "string") : [];
+  } catch {
+    return [];
+  }
+}
+function trustSite(origin: string) {
+  // Newest last; the oldest go past the limit.
+  const sites = [...trustedSites().filter((h) => h !== origin), origin].slice(-TRUSTED_MAX);
+  try {
+    localStorage.setItem(TRUSTED_KEY, JSON.stringify(sites));
+  } catch {
+    // storage blocked or full: the answer lasts for this page only
+  }
+  pageTrusted.add(origin);
+}
+const pageTrusted = new Set<string>();
 function openLink(raw: string) {
   let url: URL;
   try {
@@ -594,18 +620,20 @@ function openLink(raw: string) {
   }
   if (url.protocol !== "https:" && url.protocol !== "http:") return;
   // Another artifact or the list in this workspace just opens, as on any page. Anything else here (sign-in,
-  // switching account, consent) could act on the viewer, so it asks like an outside link.
+  // switching account, consent) could act on the viewer, so it asks every time.
   if (url.origin === location.origin && /^\/(a\/[a-z0-9]+\/?)?$/.test(url.pathname)) {
     location.assign(url.href);
     return;
   }
-  // Anywhere else asks first. A host can be trusted for the page view, but only for links that carry nothing
-  // (no query or fragment): anything the page read could be hidden there, so those always ask, in full.
-  const carries = url.search.length > 1 || url.hash.length > 1;
-  if (carries || !allowedHosts.has(url.host)) {
+  const own = url.origin === location.origin || ourSite(url.hostname);
+  // Trust is per origin: saying yes to https://github.com doesn't also trust http://github.com.
+  const trusted = !own && (pageTrusted.has(url.origin) || trustedSites().includes(url.origin));
+  const carriesALot = url.pathname.length + url.search.length + url.hash.length > CARRIES_A_LOT;
+  if (!trusted || carriesALot) {
     const shown = url.href.length > 1000 ? `${url.href.slice(0, 1000)}… (${url.href.length} characters in all)` : url.href;
-    if (!confirm(`This page wants to open a link on ${url.host}:\n\n${shown}\n\nOpen it?`)) return;
-    if (!carries) allowedHosts.add(url.host);
+    const remember = !own && !trusted ? `\n\nYou won't be asked again for ${url.host} in this workspace on this device.` : "";
+    if (!confirm(`This page wants to open a link on ${url.host}:\n\n${shown}${remember}\n\nOpen it?`)) return;
+    if (!own && !trusted) trustSite(url.origin);
   }
   if (url.origin === location.origin) location.assign(url.href);
   else window.open(url.href, "_blank", "noopener,noreferrer");

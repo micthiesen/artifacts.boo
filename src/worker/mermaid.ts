@@ -70,8 +70,11 @@ export async function checkMermaid(path: string, blocks: MermaidBlock[]): Promis
 export async function mermaidNodeIds(code: string): Promise<Set<string> | undefined> {
   try {
     await load(detectType(code));
-    const model = parse(code) as { nodes?: Map<string, unknown> | unknown[] };
-    if (model.nodes instanceof Map) return new Set(model.nodes.keys());
+    const model = parse(code) as { nodes?: Map<string, unknown> | unknown[]; actors?: Map<string, unknown>; subgraphs?: { id?: string }[] };
+    // A subgraph's id lights all of it, so it counts as a node.
+    if (model.nodes instanceof Map) return new Set([...model.nodes.keys(), ...(model.subgraphs ?? []).flatMap((g) => (g.id ? [g.id] : []))]);
+    // A sequence diagram's "nodes" are its participants.
+    if (model.actors instanceof Map) return new Set(model.actors.keys());
   } catch {
     // checkMermaid reports syntax errors.
   }

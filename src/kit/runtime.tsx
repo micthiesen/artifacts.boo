@@ -372,12 +372,12 @@ export async function boot(options: BootOptions = {}): Promise<void> {
   if (!check) {
     installAnnotations(rootEl, send);
     installKeys(rootEl, send);
-    // Give the first render (and lazy charts) a moment before anchoring.
-    setTimeout(() => {
-      rendered = true;
-      for (const fn of afterRender.splice(0)) fn();
-    }, 150);
   }
+  // Give the first render (and lazy charts) a moment before anchoring. A check needs this too: its section scroll waits for it.
+  setTimeout(() => {
+    rendered = true;
+    for (const fn of afterRender.splice(0)) fn();
+  }, 150);
   if (check) {
     // A check of one section (#slug in the frame URL) scrolls there, so the screenshot shows it.
     const section = new URLSearchParams(location.search).get("section");

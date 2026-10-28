@@ -6,6 +6,7 @@
 @import "./theme.css";
 @import "./annotate.css";
 @import "./keys.css";
+@import "./diagram-steps.css";
 @import "./motion.css";
 @import "./print.css";
 
@@ -207,23 +208,6 @@
   display: block;
   margin-inline: auto;
 }
-/* Pele's zoom buttons cover short diagrams; show them as a compact row only
-   while the pointer or keyboard focus is on the diagram (pinch still zooms). */
-.art-diagram .pele-zoom {
-  flex-direction: row !important;
-  opacity: 0;
-  transition: opacity var(--motion-fast);
-}
-.art-diagram:hover .pele-zoom,
-.art-diagram:focus-within .pele-zoom {
-  opacity: 1;
-}
-@media print {
-  .art-diagram .pele-zoom {
-    display: none !important;
-  }
-}
-
 /* Markdown tables with more than three columns read as cards on phones (labels come from the header row). */
 @media (max-width: 639px) {
   .md-cards {

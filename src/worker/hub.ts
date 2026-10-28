@@ -1476,7 +1476,11 @@ export class Workspace extends DurableObject {
         if (key.startsWith("case/") && by !== null) throw new HubError("a support case's status is set through the support tools");
         // Ledger entries say who added them, so agents can't add or change one; they may remove one (after folding it into a data file).
         if (opts.agent && key.startsWith("ledger/") && raw !== null) throw new HubError("ledger entries are added by people on the page; keep your own rows in the Ledger's data file");
-        const value = by ? stampCollab(key, raw, by, Boolean(existing), (owner as string | null | undefined) ?? null, opts.role, version, typeof prior?.at === "number" ? prior.at : undefined) : raw;
+        // A <Decision> is answered by a person on the page; the agent asks the question and reads the answer.
+        if (opts.agent && key.startsWith("decide/")) throw new HubError("decisions are made by people on the page");
+        // Who may answer a <Decision> is written in the page's source, so read it there rather than trust the writer.
+        const deciders = by && key.startsWith("decide/") ? decidersIn(this.files(id), key.slice("decide/".length)) : null;
+        const value = by ? stampCollab(key, raw, by, Boolean(existing), (owner as string | null | undefined) ?? null, opts.role, version, typeof prior?.at === "number" ? prior.at : undefined, deciders) : raw;
         seq = this.sql.exec(`UPDATE artifacts SET state_seq = state_seq + 1 WHERE id = ? RETURNING state_seq`, id).one().state_seq as number;
         if (value === null) {
           this.sql.exec(`DELETE FROM state WHERE artifact_id = ? AND key = ?`, id, key);
@@ -1525,6 +1529,20 @@ export class Workspace extends DurableObject {
         component: m[1] === "approve" ? "approval" : "form",
         block: m[2],
         ...(v.decision ? { decision: v.decision } : {}),
+        ...(v.note ? { note: v.note.slice(0, 300) } : {}),
+        changed: !a.created,
+        origin: opts.origin,
+      });
+    }
+    // So is a Decision's answer: one shared key, decide/<id>, holding whoever chose it.
+    for (const a of applied) {
+      const d = /^decide\/([^/]+)$/.exec(a.key);
+      if (!d || !by || !a.value || typeof a.value !== "object" || Array.isArray(a.value)) continue;
+      const v = a.value as { choice?: string; note?: string };
+      this.notifyResponse(id, by, {
+        component: "decision",
+        block: d[1],
+        ...(v.choice ? { decision: v.choice } : {}),
         ...(v.note ? { note: v.note.slice(0, 300) } : {}),
         changed: !a.created,
         origin: opts.origin,
@@ -2965,7 +2983,7 @@ export class Workspace extends DurableObject {
   private notifyResponse(
     id: string,
     actor: Actor,
-    r: { component: "approval" | "form"; block: string; decision?: string; note?: string; changed: boolean; origin?: string },
+    r: { component: "approval" | "form" | "decision"; block: string; decision?: string; note?: string; changed: boolean; origin?: string },
   ) {
     const owner = this.requireArtifact(id).owner as string;
     const candidates = new Set<string>([owner]);
@@ -3817,6 +3835,58 @@ function seenVersion(claimed: unknown, current: number): number {
 const RESPONSE_KEY = /^(approve|form)\/([^/]+)\/(.+)$/;
 const RESPONSE_ID = /^[\w.-]{1,64}$/;
 const FORM_FIELDS_MAX = 50;
+const DECISION_CHOICE_MAX = 200;
+
+/**
+ * The lowercased emails a page's `<Decision id="…" deciders={[…]}>` names, or null when no Decision with that id
+ * names any (anyone who can edit decides then). Only literal strings count: deciders built in code can't be read
+ * here, so the kit's read-only view is all that holds those back.
+ */
+export function decidersIn(files: Record<string, string>, decisionId: string): string[] | null {
+  let out: string[] | null = null;
+  for (const [path, source] of Object.entries(files)) {
+    if (!/\.(mdx?|[jt]sx?)$/.test(path)) continue;
+    for (let at = source.indexOf("<Decision"); at !== -1; at = source.indexOf("<Decision", at + 1)) {
+      if (/[\w$]/.test(source[at + "<Decision".length] ?? "")) continue;
+      const tag = openingTag(source, at);
+      const id = /(?:^|\s)id\s*=\s*(?:"([^"]*)"|'([^']*)'|\{\s*["'`]([^"'`]*)["'`]\s*\})/.exec(tag);
+      if (!id || (id[1] ?? id[2] ?? id[3]) !== decisionId) continue;
+      const list = /(?:^|\s)deciders\s*=\s*\{/.exec(tag);
+      if (!list) continue;
+      const expr = balanced(tag, list.index + list[0].length - 1);
+      const emails = [...expr.matchAll(/["'`]([^"'`\s]+@[^"'`\s]+)["'`]/g)].map((m) => m[1].trim().toLowerCase());
+      if (emails.length) out = [...(out ?? []), ...emails];
+    }
+  }
+  return out;
+}
+
+/** The text of the JSX opening tag starting at `start`, up to its closing `>` outside braces and quotes. */
+function openingTag(source: string, start: number): string {
+  let depth = 0;
+  let quote: string | null = null;
+  for (let i = start + 1; i < source.length && i < start + 20_000; i++) {
+    const c = source[i];
+    if (quote) {
+      if (c === "\\") i++;
+      else if (c === quote) quote = null;
+    } else if (c === '"' || c === "'" || c === "`") quote = c;
+    else if (c === "{") depth++;
+    else if (c === "}") depth--;
+    else if (c === ">" && depth <= 0) return source.slice(start, i + 1);
+  }
+  return source.slice(start, start + 20_000);
+}
+
+/** The braced expression opening at `open` (a "{"), braces included. */
+function balanced(text: string, open: number): string {
+  let depth = 0;
+  for (let i = open; i < text.length; i++) {
+    if (text[i] === "{") depth++;
+    else if (text[i] === "}" && --depth === 0) return text.slice(open, i + 1);
+  }
+  return text.slice(open);
+}
 
 function stampCollab(
   key: string,
@@ -3827,6 +3897,7 @@ function stampCollab(
   role: Role | undefined,
   version: number,
   existingAt?: number,
+  deciders?: string[] | null,
 ): JsonValue | null {
   const poll = /^poll\/[^/]+\/(.+)$/.exec(key);
   if (poll) {
@@ -3859,6 +3930,20 @@ function stampCollab(
       if (typeof v === "string" && v.length > COMMENT_MAX_CHARS) throw new HubError(`form field "${name.slice(0, 40)}" is limited to ${COMMENT_MAX_CHARS} characters`);
     }
     return { values, by, at: Date.now(), version: seenVersion(value.version, version) };
+  }
+  // A <Decision>'s one shared answer: anyone who can edit may make or change it (the page asks before a change),
+  // or only its deciders when the page names them. Stamped like an approval, but on an older version it still counts.
+  if (key.startsWith("decide/")) {
+    const id = key.slice("decide/".length);
+    if (!RESPONSE_ID.test(id)) throw new HubError(`"${id.slice(0, 40)}" isn't a valid decision id (letters, digits, - _ and . only)`);
+    if (deciders && !deciders.includes(by.toLowerCase())) throw new HubError("only the people this decision names can make it");
+    if (value === null) return null;
+    if (typeof value !== "object" || Array.isArray(value)) throw new HubError("a decision must be an object");
+    const choice = typeof value.choice === "string" ? value.choice.trim() : "";
+    if (!choice || choice.length > DECISION_CHOICE_MAX) throw new HubError(`a decision needs a choice of 1-${DECISION_CHOICE_MAX} characters`);
+    const note = typeof value.note === "string" ? value.note.trim() : "";
+    if (note.length > COMMENT_MAX_CHARS) throw new HubError(`notes are limited to ${COMMENT_MAX_CHARS} characters`);
+    return { choice, ...(note ? { note } : {}), by, at: Date.now(), version: seenVersion(value.version, version) };
   }
   // A Ledger entry: added by anyone who can edit, changed or removed only by whoever added it (or an owner),
   // stamped with who and when like a form response.

@@ -102,3 +102,70 @@ test("data warnings: wrong-case-free missing columns, Notion placeholders, markd
   // "Name" and "Layers" match in another case; only Price is really missing.
   expect(w.find((x) => x.startsWith('Table data="boards.json"'))).toContain("(Price)");
 });
+
+test("data warnings: a Notes box whose placeholder lists fields is a log, so a Ledger is suggested", async () => {
+  const { dataWarnings } = await import("../src/worker/compile.ts");
+  const warn = (placeholder: string) => dataWarnings({ "index.mdx": `<Notes id="log" placeholder="${placeholder}" />` }, {});
+  expect(warn("Date; recipe/version; base VG/PG; actual amounts; rest time")[0]).toContain("Ledger");
+  expect(warn("Date / Project / Worked on / What improved")[0]).toContain("Ledger");
+  // An ordinary prompt isn't a form.
+  expect(warn("Anything we should remember about this?")).toEqual([]);
+  expect(warn("Ideas, questions, links")).toEqual([]);
+});
+
+test("sources: a citation must name a source in its file, and the file must be well formed", async () => {
+  const { buildArtifact } = await import("../src/worker/compile.ts");
+  const page = (body: string) => ({ "index.mdx": `# T\n\n${body}\n` });
+  const sources = JSON.stringify([{ id: "ftc", title: "FTC rule", url: "https://ftc.gov", checked: "2026-10-25", kind: "official" }]);
+  const ok = await buildArtifact({ ...page(`Fees are capped.<Cite id="ftc" />\n\n<Sources />`), "data/sources.json": sources });
+  expect(ok.errors).toEqual([]);
+  // The default file counts as used.
+  expect(ok.warnings ?? []).toEqual([]);
+  const missing = await buildArtifact({ ...page(`Capped.<Cite id="nope" />\n\n<Sources />`), "data/sources.json": sources });
+  expect(missing.errors.map((e) => e.message).join()).toContain('<Cite id="nope"> names no source');
+  const bad = await buildArtifact({ ...page(`<Sources />`), "data/sources.json": JSON.stringify([{ id: "a b", url: "ftp://x", checked: "2026-02-30" }]) });
+  expect(bad.errors.length).toBeGreaterThanOrEqual(3);
+  const noFile = await buildArtifact(page(`<Sources />`));
+  expect(noFile.errors[0]?.message).toContain("doesn't exist");
+  const unlisted = await buildArtifact({ ...page(`Capped.<Cite id="ftc" />`), "data/sources.json": sources });
+  expect(unlisted.errors).toEqual([]);
+  expect(unlisted.warnings?.some((w) => w.includes("no <Sources"))).toBe(true);
+});
+
+test("a Decision's deciders must be literal emails, so the server can hold the page to them", async () => {
+  const { buildArtifact } = await import("../src/worker/compile.ts");
+  const page = (tag: string) => ({ "index.mdx": `# T\n\n${tag}\n` });
+  expect((await buildArtifact(page(`<Decision id="go" question="Ship?" options={["Yes", "No"]} deciders={["sam@example.com", 'dana@example.com']} />`))).errors).toEqual([]);
+  expect((await buildArtifact(page(`<Decision id="go" question="Ship?" options={["Yes", "No"]} />`))).errors).toEqual([]);
+  const computed = await buildArtifact(page(`export const LIST = ["sam@example.com"]\n\n<Decision id="go" question="Ship?" options={["Yes", "No"]} deciders={LIST} />`));
+  expect(computed.errors[0]?.message).toContain("literally");
+});
+
+test("recipe and evidence checks only look at the kit's own components, read whole tags, and skip computed props", async () => {
+  const { buildArtifact } = await import("../src/worker/compile.ts");
+  // A page with its own Sources/Cite component isn't held to the kit's data file.
+  const own = await buildArtifact({ "app.tsx": `function Sources({ items }: { items: string[] }) { return <ul>{items.map((i) => <li key={i}>{i}</li>)}</ul>; }\nexport default function App() { return <Sources items={["a"]} />; }\n` });
+  expect(own.errors).toEqual([]);
+  // A ">" inside an earlier prop doesn't end the tag: data="x.json" is still seen.
+  const arrow = await buildArtifact({
+    "app.tsx": `import { Shortlist } from "@a/ui";\nexport default function App() { return <Shortlist key={[1].map((n) => n > 0).join()} data="x.json" />; }\n`,
+    "data/x.json": JSON.stringify({ question: "Which?", checked: "2026-10-20", options: [
+      { id: "a", name: "A", verdict: "close", summary: "First.", url: "https://a.example" },
+      { id: "b", name: "B", verdict: "conditional", summary: "Second.", url: "https://b.example" },
+    ] }),
+  });
+  expect(arrow.errors).toEqual([]);
+  // A spread may carry data: not checked here.
+  const spread = await buildArtifact({ "app.tsx": `import { Findings } from "@a/ui";\nconst p = { data: "f.json" };\nexport default function App() { return <Findings {...p} />; }\n` });
+  expect(spread.errors.filter((e) => e.message.includes("findings.json"))).toEqual([]);
+  // data-id isn't id.
+  const sources = JSON.stringify([{ id: "a", title: "A", url: "https://a.example" }]);
+  const hyphen = await buildArtifact({ "index.mdx": `# T\n\nX.<Cite data-note="zz" id="a" />\n\n<Sources />\n`, "data/sources.json": sources });
+  expect(hyphen.errors).toEqual([]);
+  // A tag mentioned in a TSX comment isn't a use.
+  const comment = await buildArtifact({ "app.tsx": `// <Shortlist />\nexport default function App() { return <p>hi</p>; }\n` });
+  expect(comment.errors).toEqual([]);
+  // deciders with no email can't be held to anyone.
+  const noEmail = await buildArtifact({ "index.mdx": `# T\n\n<Decision id="go" question="Ship?" options={["Yes", "No"]} deciders={["Sam"]} />\n` });
+  expect(noEmail.errors[0]?.message).toContain("literally");
+});

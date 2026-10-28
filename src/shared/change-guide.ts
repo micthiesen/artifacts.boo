@@ -1,51 +1,121 @@
 // A change guide's data file (data/guide.json, rendered by <ChangeGuide>): what a code change does, told for
 // someone with no context. The Worker checks it on every write so a guide that skips a changed file, points
 // at a missing step or lights a node its picture doesn't have is refused with a reason, not shown wrong.
+// Everything added after the first version is optional, so guides written before it keep saving and showing.
 
 export type GuideFile = { path: string; add?: number; del?: number };
 export type GuideStop = { title: string; why: string; files: string[]; focus?: string; diff?: { file?: string; lines: string } };
-export type GuideProof = { check: string; ran: boolean; exit?: number; head?: string };
+export type GuideProof = {
+  check: string;
+  ran: boolean;
+  exit?: number;
+  head?: string;
+  /** "fail" for red-first evidence: a test run before the fix, which should have failed. */
+  expect?: "pass" | "fail";
+  env?: "local" | "ci" | "staging" | "prod";
+  /** The run's page (a CI run). */
+  link?: string;
+  /** What the run reported, in its words: "212 passed". */
+  count?: string;
+};
+/** Same shape as <Delta>'s rows. */
+export type GuideMetric = { label: string; before: number; after: number; unit?: string; better: "up" | "down"; note?: string };
+export type GuideShot = { before?: string; after?: string; caption: string };
 export type ChangeGuideData = {
   head: string;
   url?: string;
+  links?: { label: string; url: string }[];
   outcome: string;
   where: string;
   risk: "low" | "medium" | "high";
+  riskWhy?: string;
   revert: string;
   ask: { kind: "approve" | "try" | "decide"; text: string; steps?: string[] };
+  decide?: { question: string; options: string[]; recommended?: string };
   before: string;
   after: string;
+  metrics?: GuideMetric[];
+  metricsNote?: string;
+  shots?: GuideShot[];
   map: string;
   lookHere?: { q: string; stop: number }[];
   stops: GuideStop[];
   alsoTouched?: string[];
   proof: GuideProof[];
+  verify?: { steps: string[]; expected: string };
   files: GuideFile[];
 };
 
-export const GUIDE_LIMITS = { stops: 6, lookHere: 3, diffLines: 15, titleWords: 8 } as const;
+export const GUIDE_LIMITS = {
+  stops: 6,
+  lookHere: 3,
+  diffLines: 15,
+  titleWords: 8,
+  links: 4,
+  metrics: 8,
+  shots: 4,
+  verifySteps: 6,
+  decideOptions: 5,
+} as const;
 
 const RISKS = ["low", "medium", "high"];
 const ASKS = ["approve", "try", "decide"];
+const ENVS = ["local", "ci", "staging", "prod"];
 
 const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
 const isText = (v: unknown) => typeof v === "string" && v.trim().length > 0;
 const isCount = (v: unknown) => v === undefined || (typeof v === "number" && Number.isInteger(v) && v >= 0);
+const isUrl = (v: unknown) => typeof v === "string" && /^https?:\/\/\S+$/.test(v);
+const isNum = (v: unknown) => typeof v === "number" && Number.isFinite(v);
+/** An image uploaded with artifact_asset; a data: URL works too (the kit harness has no asset store). */
+const isImage = (v: unknown) => typeof v === "string" && (/^assets\/\S+$/.test(v) || v.startsWith("data:image/"));
+
+/** Which kind of picture a guide's map is: a top-down flowchart, or a sequence of messages between participants. */
+export function mapKind(map: string): "flowchart" | "sequence" | null {
+  const first = map.replace(/^\s*(%%[^\n]*\n\s*)*/, "");
+  if (/^flowchart\s+(TD|TB)\b/.test(first)) return "flowchart";
+  if (/^sequenceDiagram\b/.test(first)) return "sequence";
+  return null;
+}
+
+/** A heading as an anchor: "After it ships" is "after-it-ships". */
+export function slug(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "");
+}
 
 /**
- * Every problem with a guide's data, as one line each; empty when it's fine. `nodes` are the map's node ids from
- * Pele's parse (the Worker has them); without them a step's `focus` isn't checked, since guessing ids from the
- * source would refuse guides that are fine.
+ * Every problem with a guide's data, as one line each; empty when it's fine. `nodes` are the map's node ids
+ * (a sequence map's participants) from Pele's parse (the Worker has them); without them a step's `focus` isn't
+ * checked, since guessing ids from the source would refuse guides that are fine.
  */
 export function checkChangeGuide(value: unknown, nodes?: Set<string>): string[] {
   if (!isObj(value)) return ["must be a JSON object (see artifact_guide topic \"change\")"];
   const g = value;
   const out: string[] = [];
   for (const k of ["head", "outcome", "where", "revert", "before", "after", "map"]) if (!isText(g[k])) out.push(`"${k}" is required text`);
-  if (g.url !== undefined && (typeof g.url !== "string" || !/^https?:\/\//.test(g.url))) out.push(`"url" is an http(s) link to the change`);
+  if (g.url !== undefined && !isUrl(g.url)) out.push(`"url" is an http(s) link to the change`);
+  if (g.links !== undefined) {
+    const links = Array.isArray(g.links) ? g.links : [];
+    if (!Array.isArray(g.links) || links.length > GUIDE_LIMITS.links) out.push(`"links" is a list of at most ${GUIDE_LIMITS.links} {label, url}: the ticket, the CI run, related guides`);
+    for (const l of links) if (!isObj(l) || !isText(l.label) || !isUrl(l.url)) out.push(`each of "links" is {label, url} with an http(s) url`);
+  }
   if (!RISKS.includes(g.risk as string)) out.push(`"risk" is one of ${RISKS.join(", ")}`);
+  if (g.riskWhy !== undefined && !isText(g.riskWhy)) out.push(`"riskWhy" is one sentence saying why the risk is what it is, or leave it out`);
   if (!isObj(g.ask) || !ASKS.includes(g.ask.kind as string) || !isText(g.ask.text)) out.push(`"ask" is {kind: ${ASKS.join("|")}, text, steps?}`);
   else if (g.ask.steps !== undefined && (!Array.isArray(g.ask.steps) || !g.ask.steps.every(isText))) out.push(`"ask.steps" is a list of short instructions`);
+  if (g.decide !== undefined) {
+    const d = g.decide;
+    const opts = isObj(d) && Array.isArray(d.options) ? d.options : [];
+    if (!isObj(d) || !isText(d.question) || opts.length < 2 || opts.length > GUIDE_LIMITS.decideOptions || !opts.every(isText)) {
+      out.push(`"decide" is {question, options, recommended?} with 2 to ${GUIDE_LIMITS.decideOptions} short options`);
+    } else {
+      if (new Set(opts).size !== opts.length) out.push(`"decide.options" are each different`);
+      if (d.recommended !== undefined && !opts.includes(d.recommended)) out.push(`"decide.recommended" is one of "decide.options", word for word`);
+    }
+  }
 
   const files = Array.isArray(g.files) ? g.files : [];
   if (!files.length) out.push(`"files" lists every changed file, pasted from \`git diff --numstat\`: [{path, add, del}]`);
@@ -57,6 +127,28 @@ export function checkChangeGuide(value: unknown, nodes?: Set<string>): string[] 
     }
     if (paths.has(f.path as string)) out.push(`"${f.path}" is listed twice in "files"`);
     paths.add(f.path as string);
+  }
+
+  if (g.metrics !== undefined) {
+    const rows = Array.isArray(g.metrics) ? g.metrics : [];
+    if (!rows.length || rows.length > GUIDE_LIMITS.metrics) out.push(`"metrics" has 1 to ${GUIDE_LIMITS.metrics} rows of {label, before, after, unit?, better: "up"|"down"}`);
+    for (const r of rows) {
+      const name = isObj(r) && isText(r.label) ? `metric "${r.label}"` : "each metric";
+      if (!isObj(r) || !isText(r.label)) out.push(`each metric is {label, before, after, unit?, better: "up"|"down", note?}`);
+      else if (!isNum(r.before) || !isNum(r.after)) out.push(`${name}'s "before" and "after" are plain numbers; put the unit in "unit"`);
+      else if (r.better !== "up" && r.better !== "down") out.push(`${name}'s "better" is "up" or "down": which way is an improvement`);
+      else if ((r.unit !== undefined && typeof r.unit !== "string") || (r.note !== undefined && typeof r.note !== "string")) out.push(`${name}'s "unit" and "note" are text`);
+    }
+  }
+  if (g.metricsNote !== undefined && (!isText(g.metricsNote) || g.metrics === undefined)) out.push(`"metricsNote" says how "metrics" were measured (window, sample size); add it only with "metrics"`);
+
+  if (g.shots !== undefined) {
+    const shots = Array.isArray(g.shots) ? g.shots : [];
+    if (!shots.length || shots.length > GUIDE_LIMITS.shots) out.push(`"shots" has 1 to ${GUIDE_LIMITS.shots} pairs of screenshots`);
+    for (const s of shots) {
+      if (!isObj(s) || !isText(s.caption) || (s.before === undefined && s.after === undefined)) out.push(`each shot is {before?, after?, caption} with at least one image`);
+      else if ([s.before, s.after].some((p) => p !== undefined && !isImage(p))) out.push(`shot "${s.caption}": "before" and "after" are uploaded images ("assets/before.png", from artifact_asset)`);
+    }
   }
 
   const stops = Array.isArray(g.stops) ? g.stops : [];
@@ -113,9 +205,159 @@ export function checkChangeGuide(value: unknown, nodes?: Set<string>): string[] 
   if (!Array.isArray(g.proof)) out.push(`"proof" lists checks: [{check, ran: true, exit, head}] or [{check, ran: false}]`);
   else {
     for (const p of g.proof) {
-      if (!isObj(p) || !isText(p.check) || typeof p.ran !== "boolean") out.push(`each "proof" item is {check, ran, exit?, head?}`);
-      else if (p.ran && (!Number.isInteger(p.exit) || !isText(p.head))) out.push(`proof "${p.check}" ran, so it needs its "exit" code and the "head" commit it ran at`);
+      if (!isObj(p) || !isText(p.check) || typeof p.ran !== "boolean") {
+        out.push(`each "proof" item is {check, ran, exit?, head?, expect?, env?, link?, count?}`);
+        continue;
+      }
+      if (p.ran && (!Number.isInteger(p.exit) || !isText(p.head))) out.push(`proof "${p.check}" ran, so it needs its "exit" code and the "head" commit it ran at`);
+      if (p.expect !== undefined && p.expect !== "pass" && p.expect !== "fail") out.push(`proof "${p.check}": "expect" is "pass", or "fail" for a test run before the fix to show it failed`);
+      if (p.env !== undefined && !ENVS.includes(p.env as string)) out.push(`proof "${p.check}": "env" is one of ${ENVS.join(", ")}`);
+      if (p.link !== undefined && !isUrl(p.link)) out.push(`proof "${p.check}": "link" is an http(s) link to the run`);
+      if (p.count !== undefined && !isText(p.count)) out.push(`proof "${p.check}": "count" is what the run reported, like "212 passed"`);
+    }
+  }
+
+  if (g.verify !== undefined) {
+    const v = g.verify;
+    const steps = isObj(v) && Array.isArray(v.steps) ? v.steps : [];
+    if (!isObj(v) || !isText(v.expected) || !steps.length || steps.length > GUIDE_LIMITS.verifySteps || !steps.every(isText)) {
+      out.push(`"verify" is {steps, expected}: 1 to ${GUIDE_LIMITS.verifySteps} steps to check it once it ships, and what they should show`);
     }
   }
   return [...new Set(out)];
+}
+
+// ---- File lists ----------------------------------------------------------------------------------------------
+
+/** One line of a file list: a file, or the same file under several roots (a mirrored copy) shown once. */
+export type FileItem = {
+  /** The path shown: the first copy's. */
+  path: string;
+  dir: string;
+  name: string;
+  add?: number;
+  del?: number;
+  /** Mirrored copies: every root (the part before the shared tail), in list order. "" is the repository's root. */
+  roots?: string[];
+  /** Every full path this line stands for. */
+  paths: string[];
+};
+
+/** A directory's lines, or one line on its own when it is the only file from its directory. */
+export type FileGroup = { dir: string; items: FileItem[] };
+
+/** A path cut before its file name: "src/kit/ui/" and "table.tsx". The directory keeps its trailing slash. */
+export function splitPath(path: string): { dir: string; name: string } {
+  const i = path.lastIndexOf("/");
+  return { dir: path.slice(0, i + 1), name: path.slice(i + 1) };
+}
+
+/** How many trailing path segments two paths share. */
+function sharedTail(a: string[], b: string[]): number {
+  let n = 0;
+  while (n < a.length && n < b.length && a[a.length - 1 - n] === b[b.length - 1 - n]) n++;
+  return n;
+}
+
+const sum = (xs: (number | undefined)[]) => (xs.some((x) => x == null) ? undefined : xs.reduce<number>((n, x) => n + x!, 0));
+
+/**
+ * The files as lines, with mirrored copies (the same tail of at least two segments, like `kit/ui/table.tsx`
+ * under `src/` and `packages/web/src/`) folded into one line that lists both roots. Pairs sharing the longest
+ * tail are matched first, so a file isn't folded into a looser match when a closer one exists.
+ */
+export function foldMirrors(files: GuideFile[]): FileItem[] {
+  const segs = files.map((f) => f.path.split("/"));
+  const pairs: [number, number, number][] = [];
+  for (let i = 0; i < files.length; i++) {
+    for (let j = i + 1; j < files.length; j++) {
+      const n = sharedTail(segs[i]!, segs[j]!);
+      // A mirror is the same file under another root: one whole path is the other's tail ("src/a.ts" in
+      // "packages/web/src/a.ts"). Two packages' own files with a common tail ("packages/web/src/index.ts" and
+      // "packages/api/src/index.ts") are different files.
+      if (n >= 2 && (n === segs[i]!.length || n === segs[j]!.length)) pairs.push([n, i, j]);
+    }
+  }
+  pairs.sort((a, b) => b[0] - a[0] || a[1] - b[1] || a[2] - b[2]);
+  const cluster = new Map<number, { tail: number; members: number[] }>();
+  for (const [n, i, j] of pairs) {
+    const ci = cluster.get(i);
+    const cj = cluster.get(j);
+    if (!ci && !cj) {
+      const c = { tail: n, members: [i, j] };
+      cluster.set(i, c).set(j, c);
+    } else if (ci && !cj && ci.tail === n) {
+      ci.members.push(j);
+      cluster.set(j, ci);
+    } else if (cj && !ci && cj.tail === n) {
+      cj.members.push(i);
+      cluster.set(i, cj);
+    }
+  }
+  const out: FileItem[] = [];
+  const done = new Set<number>();
+  files.forEach((f, i) => {
+    if (done.has(i)) return;
+    const c = cluster.get(i);
+    const members = c ? [...c.members].sort((a, b) => a - b) : [i];
+    for (const m of members) done.add(m);
+    const group = members.map((m) => files[m]!);
+    const item: FileItem = { path: f.path, ...splitPath(f.path), add: sum(group.map((x) => x.add)), del: sum(group.map((x) => x.del)), paths: group.map((x) => x.path) };
+    if (c) item.roots = members.map((m) => segs[m]!.slice(0, segs[m]!.length - c.tail).join("/") + (segs[m]!.length > c.tail ? "/" : ""));
+    out.push(item);
+  });
+  return out;
+}
+
+/** Lines grouped by directory, in the order each directory first appears (authors list files on purpose). */
+export function groupFiles(files: GuideFile[]): FileGroup[] {
+  const groups = new Map<string, FileGroup>();
+  for (const item of foldMirrors(files)) {
+    const g = groups.get(item.dir) ?? { dir: item.dir, items: [] };
+    g.items.push(item);
+    groups.set(item.dir, g);
+  }
+  return [...groups.values()];
+}
+
+/** The first `limit` lines of grouped files, keeping groups whole where they fit and cutting the last one short. */
+export function takeLines(groups: FileGroup[], limit: number): FileGroup[] {
+  const out: FileGroup[] = [];
+  let left = limit;
+  for (const g of groups) {
+    if (left <= 0) break;
+    out.push(g.items.length <= left ? g : { dir: g.dir, items: g.items.slice(0, left) });
+    left -= g.items.length;
+  }
+  return out;
+}
+
+// ---- Proof -------------------------------------------------------------------------------------------------
+
+export type ProofStatus = {
+  /** "passed" / "failed": the check did what it should or didn't. "red" is a red-first test that failed as it should. */
+  verdict: "passed" | "failed" | "red" | "not-run";
+  /** Ran at a commit other than the guide's head. Said quietly: a red-first run always is. */
+  older: boolean;
+};
+
+/** What a check's row says: did it do what it should, and was it at the commit the guide describes. */
+export function proofStatus(p: GuideProof, head: string): ProofStatus {
+  if (!p.ran) return { verdict: "not-run", older: false };
+  const older = !!p.head && p.head !== head;
+  if (p.expect === "fail") return { verdict: p.exit !== 0 ? "red" : "failed", older };
+  return { verdict: p.exit === 0 ? "passed" : "failed", older };
+}
+
+/** The guide's stepped map: one step per stop that has a `focus`, and which step each such stop is. */
+export function mapSteps(stops: GuideStop[]): { steps: { focus: string; title: string; text: string }[]; stepOf: Map<number, number> } {
+  const steps: { focus: string; title: string; text: string }[] = [];
+  const stepOf = new Map<number, number>();
+  stops.forEach((s, i) => {
+    if (!s.focus?.trim()) return;
+    stepOf.set(i, steps.length);
+    // The bar counts map steps; the title carries the stop's own number so the two lists line up.
+    steps.push({ focus: s.focus, title: `${i + 1}. ${s.title}`, text: s.why });
+  });
+  return { steps, stepOf };
 }

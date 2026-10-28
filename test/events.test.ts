@@ -68,6 +68,15 @@ test("agents' own activity is never an event", () => {
   expect(toOccurrence({ ...e, actor: DANA }, "comment.created", "https://x")).toMatchObject({ eventId: "evt_3", data: { by: DANA, threadId: "t1", text: "hi", url: "https://x/a/a1" } });
 });
 
+test("a Decision's answer is an artifact.answered event from whoever chose it", () => {
+  const value = JSON.stringify({ choice: "Thursday", note: "after the load test", by: DANA, at: "2026-10-28T00:00:00Z", version: 3 });
+  const e = { seq: 9, at: "2026-10-28T00:00:00Z", artifact: "a1", title: "T", type: "state", actor: DANA, data: { key: "decide/launch", value } };
+  expect(toOccurrence(e, "artifact.answered", "https://x")).toMatchObject({
+    data: { component: "decision", block: "launch", stateKey: "decide/launch", decision: "Thursday", note: "after the load test", version: 3, by: DANA },
+  });
+  expect(toOccurrence({ ...e, actor: "agent" }, "artifact.answered", "https://x")).toBeNull();
+});
+
 test("discover advertises the events extension; requests must carry matching headers", async () => {
   const d = await modern("server/discover");
   expect(d.status).toBe(200);

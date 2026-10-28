@@ -12,7 +12,7 @@ export type OutboxItem =
   | { kind: "stale"; data: { block: string; decision: string; seenVersion: number; version: number; note?: string; origin?: string } }
   | {
       kind: "response";
-      data: { component: "approval" | "form"; block: string; by: string; decision?: string; note?: string; changed: boolean; origin?: string };
+      data: { component: "approval" | "form" | "decision"; block: string; by: string; decision?: string; note?: string; changed: boolean; origin?: string };
     };
 
 const MENTION = /(?:^|[\s(])@([a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,})/gi;
@@ -73,6 +73,8 @@ export function composeMessage(input: {
     if (r.component === "approval") {
       const verb = r.decision === "approve" ? "approved" : "requested changes";
       lines.push(`${name(r.by)} ${verb}${r.note ? `: ${quote(r.note)}` : ""}`);
+    } else if (r.component === "decision") {
+      lines.push(`${name(r.by)} ${r.changed ? "changed the" : "made the"} "${r.block}" decision: ${quote(r.decision ?? "")}${r.note ? ` (${quote(r.note)})` : ""}`);
     } else {
       lines.push(`${name(r.by)} ${r.changed ? "updated their" : "sent a"} response to the "${r.block}" form`);
     }

@@ -114,13 +114,18 @@ export function Callout({ tone = "info", title, children, className }: Children 
   );
 }
 
-/** A headline number. `delta` like "+12%" or -3 is colored by sign; `invert` flips good/bad. */
+/**
+ * A headline number. `delta` like "+12%" or -3 is colored by sign; `invert` flips good/bad. `trend` (numbers,
+ * oldest first) draws a small line under the value in the delta's colour, or by its own last-against-first
+ * change when there's no delta.
+ */
 export function Stat({
   label,
   value,
   delta,
   hint,
   invert,
+  trend,
   className,
 }: {
   label: React.ReactNode;
@@ -128,12 +133,15 @@ export function Stat({
   delta?: string | number;
   hint?: React.ReactNode;
   invert?: boolean;
+  trend?: number[];
   className?: string;
 }) {
   let sign = 0;
   if (typeof delta === "number") sign = Math.sign(delta);
   else if (typeof delta === "string") sign = /^\s*[-−–]/.test(delta) ? -1 : /^\s*\+/.test(delta) ? 1 : 0;
   const good = invert ? sign < 0 : sign > 0;
+  const points = Array.isArray(trend) ? trend.filter((n) => typeof n === "number" && Number.isFinite(n)) : [];
+  const trendSign = delta == null || delta === "" ? Math.sign((points.at(-1) ?? 0) - (points[0] ?? 0)) : sign;
   const deltaText = typeof delta === "number" ? (delta > 0 ? `+${delta}` : String(delta)) : delta;
   return (
     <div className={cn("rounded-xl border border-border bg-card px-5 py-4 shadow-card", className)} data-speak="stat">
@@ -154,8 +162,28 @@ export function Stat({
           </span>
         )}
       </div>
+      {points.length >= 2 && (
+        <div className="mt-2">
+          <Trend points={points} tone={trendSign === 0 ? "var(--muted-foreground)" : (invert ? trendSign < 0 : trendSign > 0) ? "var(--positive)" : "var(--negative)"} />
+        </div>
+      )}
       {hint && <div className="mt-1 text-[13px] text-muted-foreground">{hint}</div>}
     </div>
+  );
+}
+
+/** A Stat's trend: Sparkline's look, drawn here so the layout module doesn't pull in the chart one. */
+function Trend({ points, tone }: { points: number[]; tone: string }) {
+  const w = 96;
+  const h = 24;
+  const min = Math.min(...points);
+  const span = Math.max(...points) - min || 1;
+  const step = w / (points.length - 1);
+  const pts = points.map((n, i) => `${(i * step).toFixed(1)},${(h - 2 - ((n - min) / span) * (h - 4)).toFixed(1)}`).join(" ");
+  return (
+    <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} className="block" aria-hidden>
+      <polyline points={pts} fill="none" stroke={tone} strokeWidth={1.5} strokeLinejoin="round" strokeLinecap="round" />
+    </svg>
   );
 }
 

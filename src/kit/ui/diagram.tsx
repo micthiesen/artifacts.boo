@@ -1,9 +1,14 @@
 import * as React from "react";
+import type { DiagramStep, StepState } from "../../shared/diagram-steps.ts";
 import { ErrorBoundary } from "./error.tsx";
 import { Button, Skeleton } from "./primitives.tsx";
 import { cn } from "./utils.ts";
 
 const DiagramImpl = React.lazy(() => import("./diagram-impl.tsx"));
+// The step bar rides in the same lazy chunk, so pages without stepped diagrams carry none of it.
+const StepBar = React.lazy(() => import("./diagram-impl.tsx").then((m) => ({ default: m.StepBar })));
+
+export type { DiagramStep };
 
 export type DiagramProps = {
   /** Mermaid source. Children work too: <Diagram>{`flowchart LR …`}</Diagram>. */
@@ -11,8 +16,14 @@ export type DiagramProps = {
   children?: React.ReactNode;
   title?: React.ReactNode;
   className?: string;
-  /** Node ids to light (space-separated); the rest of the diagram fades back. */
+  /** Node ids to light (space-separated); the rest of the diagram fades back. A subgraph's id lights all of it. */
   focus?: string;
+  /**
+   * Walk the reader through the diagram a part at a time: a bar under it shows "Step 2 of 5", Previous / Next /
+   * All, and the step's title and text, and each step lights its `focus` (and the edges between lit nodes).
+   * Replaces `focus`. Listen reads the current step's text.
+   */
+  steps?: DiagramStep[];
 };
 
 export type DiagramShow = "before" | "both" | "after";
@@ -29,24 +40,41 @@ export function Diagram(props: DiagramProps) {
   );
 }
 
-function DiagramInner({ code, children, title, className, focus }: DiagramProps) {
+const CARD = "my-6 rounded-xl border border-border bg-card p-4 shadow-card";
+
+function DiagramInner({ code, children, title, className, focus, steps }: DiagramProps) {
   const source = (code ?? textOf(children)).trim();
+  const stepped = !!steps?.length;
   // A focused diagram is a detail of one already shown whole, so only the whole one offers the switch.
-  const marked = !focus && MARKED.test(source);
+  const marked = (stepped || !focus) && MARKED.test(source);
   const [show, setShow] = React.useState<DiagramShow>("both");
-  return (
-    <figure className={cn("my-6 rounded-xl border border-border bg-card p-4 shadow-card", className)} data-speak="diagram">
+  const [step, setStep] = React.useState<StepState>({ at: 0, all: false });
+  const current = stepped ? steps[Math.min(step.at, steps.length - 1)] : undefined;
+  const lit = stepped ? (step.all ? undefined : current?.focus) : focus;
+
+  const figure = (
+    <figure className={cn(stepped ? "m-0" : CARD, !stepped && className)} data-speak="diagram">
       {title && <figcaption className="mb-3 px-1 text-sm font-medium">{title}</figcaption>}
       {marked && <ShowSwitch show={show} onShow={setShow} />}
       <React.Suspense fallback={<Skeleton className="h-48" />}>
-        <DiagramImpl code={source} show={show} focus={focus} />
+        <DiagramImpl code={source} show={show} focus={lit} steps={stepped ? steps : undefined} />
       </React.Suspense>
     </figure>
+  );
+  if (!stepped) return figure;
+  // The bar sits outside the figure: Listen reads a figure as "A diagram", and the step's words should be heard.
+  return (
+    <div className={cn(CARD, className)}>
+      {figure}
+      <React.Suspense fallback={null}>
+        <StepBar steps={steps} state={step} onState={setStep} />
+      </React.Suspense>
+    </div>
   );
 }
 
 /** The key to the marks, and a switch between the system before the change, both, and after. */
-function ShowSwitch({ show, onShow }: { show: DiagramShow; onShow: (s: DiagramShow) => void }) {
+export function ShowSwitch({ show, onShow }: { show: DiagramShow; onShow: (s: DiagramShow) => void }) {
   const id = React.useId();
   return (
     <div className="mb-3 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-1" data-speak="skip">

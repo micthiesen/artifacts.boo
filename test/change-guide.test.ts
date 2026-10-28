@@ -77,3 +77,9 @@ test("code samples mentioning <ChangeGuide> aren't uses, and ./ paths name the s
 test("the change link must be http(s)", () => {
   expect(checkChangeGuide({ ...example, url: "javascript:alert(1)" }).join("\n")).toContain('"url"');
 });
+
+test("a sequence diagram can be the map, its steps focusing participants", async () => {
+  const map = "sequenceDiagram\n  participant B as Browser\n  participant W as Worker\n  B->>W: GET /a/x\n  W-->>B: page and data";
+  const stops = [example.stops[0], { ...example.stops[1], focus: "W" }];
+  expect(await messages({ ...example, map, stops })).toEqual([]);
+});
