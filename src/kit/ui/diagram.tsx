@@ -64,7 +64,8 @@ function DiagramInner({ code, children, title, className, focus, steps }: Diagra
   if (!stepped) return figure;
   // The bar sits outside the figure: Listen reads a figure as "A diagram", and the step's words should be heard.
   return (
-    <div className={cn(CARD, className)}>
+    // data-keys-steps: the page's h and l step through this one diagram (src/kit/keys-page.ts).
+    <div className={cn(CARD, className)} data-keys-steps="">
       {figure}
       <React.Suspense fallback={null}>
         <StepBar steps={steps} state={step} onState={setStep} />
@@ -85,7 +86,7 @@ export function ShowSwitch({ show, onShow }: { show: DiagramShow; onShow: (s: Di
       </div>
       <div className="flex items-center gap-2">
         <span id={id} className="text-[13px] text-muted-foreground">Show</span>
-        <div role="group" aria-labelledby={id} className="inline-flex rounded-lg border border-border p-0.5">
+        <div role="group" aria-labelledby={id} data-keys-switch="" className="inline-flex rounded-lg border border-border p-0.5">
           {(["before", "both", "after"] as const).map((s) => (
             <Button key={s} size="sm" variant={show === s ? "secondary" : "ghost"} aria-pressed={show === s} onClick={() => onShow(s)} className="h-7 rounded-[6px] px-2.5 capitalize">
               {s}

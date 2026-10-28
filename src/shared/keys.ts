@@ -75,8 +75,8 @@ const b = (keys: string, cmd: Cmd, group: string, label: string, where: Where[] 
 export const KEYMAP: Binding[] = [
   b("j", "down", "Move", "Next block", ["artifact", "list"]),
   b("k", "up", "Move", "Previous block", ["artifact", "list"]),
-  b("h", "left", "Move", "Scroll a wide table or code block left"),
-  b("l", "right", "Move", "Scroll it right"),
+  b("h", "left", "Move", "Left: across a row, tab, step or wide table"),
+  b("l", "right", "Move", "Right: across a row, tab, step or wide table"),
   b("C-d", "halfDown", "Move", "Half a page down"),
   b("C-u", "halfUp", "Move", "Half a page up"),
   b("g g", "top", "Move", "Top", ["artifact", "list"]),

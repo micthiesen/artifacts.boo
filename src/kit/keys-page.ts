@@ -11,6 +11,7 @@
 import type { Cmd } from "../shared/keys.ts";
 import { anchorFromRange, blockAnchor, commentAllowed, focusThread, rangeAt, textIndex, threadNodes } from "./annotate.ts";
 import { speakFrom, speakJumpTo } from "./speak.ts";
+import { besideIndex, nextInColumn, type Box } from "./keys-geometry.ts";
 import { keysMode, keysRoot, note, sendKey as send, setKeysMode, showcmd } from "./keys.ts";
 
 /** What counts as a block. The innermost one is the cursor's stop; the atomic ones are stops whole. */
@@ -49,6 +50,7 @@ document.addEventListener("keydown", (e) => {
 });
 
 export function run(cmd: Cmd, n: number) {
+  tabWait++;
   // React may have rewritten the cursor block's classes: put the ring back.
   if (cursor?.isConnected && !ring?.classList.contains("art-cursor")) paintCursor(cursor);
   if (keysMode() === "visual") return visual(cmd, n);
@@ -238,6 +240,7 @@ function step(dir: 1 | -1, n: number) {
   let { i, fresh } = at(list);
   // The first press shows where you are; a count goes on from there.
   if (fresh) n -= 1;
+  let geometry: Box[] | undefined;
   for (let k = 0; k < n; k++) {
     // A block taller than the screen scrolls through before the cursor moves on.
     const r = list[i]!.getBoundingClientRect();
@@ -245,12 +248,16 @@ function step(dir: 1 | -1, n: number) {
       scrollerOf(list[i]!).scrollBy({ top: (dir * innerHeight) / 3, behavior: "instant" });
       continue;
     }
+    // Down or up a row: blocks side by side (Stat cells, cards, columns) are crossed with h and l instead.
+    // Scrolling moves every box alike, so their layout is read once per press.
+    geometry ??= boxes(list);
+    const next = nextInColumn(geometry, i, dir);
     // At the first or last block, one more press goes the rest of the way: the very top or bottom of the page.
-    if (i + dir < 0 || i + dir >= list.length) {
+    if (next < 0) {
       if (list[i] !== cursor) setCursor(list[i]!);
       return scrollEnd(dir, list[i]!);
     }
-    i += dir;
+    i = next;
   }
   if (list[i] !== cursor) setCursor(list[i]!);
 }
@@ -272,18 +279,93 @@ function half(dir: 1 | -1, n: number) {
 
 const scrollsSideways = (el: Element) => /(auto|scroll)/.test(getComputedStyle(el).overflowX) && el.scrollWidth > el.clientWidth + 1;
 
-/** h and l: scroll what's wide at the cursor (a table's scroller, a code block, a wide diagram) sideways. */
+const boxes = (list: Element[]): Box[] => list.map((el) => el.getBoundingClientRect());
+/** Counts key presses, so a tab panel still being waited for is dropped once another key comes. */
+let tabWait = 0;
+
+/**
+ * h and l: sideways at the cursor, the nearest thing first. Something wide in the block (a table, a code block,
+ * a zoomed diagram) scrolls until it reaches its edge. Then a control around it: a stepped diagram's Previous
+ * and Next, a diagram's Before / Both / After, a set of tabs. Then the block beside it in the same row (the
+ * next Stat cell, card or column).
+ */
 function sideways(dir: 1 | -1, n: number) {
-  const el = current();
-  if (!el) return;
+  for (let k = 0; k < n; k++) {
+    // Each press starts from wherever the last one left the cursor.
+    const el = current();
+    if (!el) return;
+    const moved = scrollAcross(el, dir) || pressAcross(el, dir) || moveAcross(dir);
+    if (!moved) return note(dir > 0 ? "Nothing further right" : "Nothing further left");
+  }
+}
+
+/** Scrolls what's wide in or around the block, unless it's already at that edge. */
+function scrollAcross(el: Element, dir: 1 | -1): boolean {
   let box: Element | null = null;
   for (let up: Element | null = el; up && up !== keysRoot() && !box; up = up.parentElement) if (scrollsSideways(up)) box = up;
   box ??= [...el.querySelectorAll("*")].find(scrollsSideways) ?? null;
-  if (!box) return note("Nothing here scrolls sideways");
-  const by = Math.max(80, box.clientWidth / 3) * n * dir;
+  if (!box) return false;
   const was = box.scrollLeft;
-  box.scrollBy({ left: by, behavior: "instant" });
-  if (box.scrollLeft === was) note(dir > 0 ? "At the right edge" : "At the left edge");
+  box.scrollBy({ left: Math.max(80, box.clientWidth / 3) * dir, behavior: "instant" });
+  return box.scrollLeft !== was;
+}
+
+/**
+ * Presses the next control across for the block: a stepped diagram's Previous / Next, a Before / Both / After
+ * switch, or a tab list. Only the block's own widget counts (the stepped diagram's card, the diagram the
+ * switch sits in, the Tabs around the panel), never a control elsewhere on the page.
+ */
+function pressAcross(el: Element, dir: 1 | -1): boolean {
+  const owns = (owner: Element | null) => !!owner && (owner.contains(el) || el.contains(owner));
+  const steps = el.closest("[data-keys-steps]") ?? el.querySelector("[data-keys-steps]");
+  if (steps) {
+    const button = steps.querySelector<HTMLElement>(`[data-keys-step="${dir > 0 ? "next" : "prev"}"]`);
+    if (button) {
+      // At the last step, the key goes on to whatever is beside the diagram.
+      if (button.getAttribute("aria-disabled") === "true") return false;
+      button.click();
+      return true;
+    }
+  }
+  const root = keysRoot();
+  const group =
+    [...root.querySelectorAll("[data-keys-switch]")].find((g) => owns(g.closest("figure"))) ??
+    // The innermost Tabs around the block: an inner set comes after its outer one in the page.
+    [...root.querySelectorAll("[role=tablist]")].filter((t) => owns(t.parentElement)).at(-1);
+  if (!group) return false;
+  const items = [...group.querySelectorAll<HTMLElement>("[aria-pressed], [role=tab]")].filter((b) => !b.matches("[disabled], [aria-disabled=true]"));
+  const at = items.findIndex((b) => b.getAttribute("aria-pressed") === "true" || b.getAttribute("aria-selected") === "true");
+  const next = items[at + dir];
+  // Past the last tab or option, the key goes on to whatever is beside it.
+  if (!next) return false;
+  next.click();
+  // A new tab shows another panel: the cursor moves into it rather than being left on text that went away.
+  // React shows it a frame or two later, so look for a few frames.
+  if (group.matches("[role=tablist]")) {
+    const tabs = group.parentElement!;
+    let tries = 0;
+    const mine = ++tabWait;
+    const land = () => {
+      // A newer key press has taken over.
+      if (mine !== tabWait) return;
+      const panel = [...tabs.querySelectorAll("[role=tabpanel]")].find((p) => !p.hasAttribute("hidden") && (!next.id || p.getAttribute("aria-labelledby") === next.id));
+      const block = panel && blocks().find((b) => panel.contains(b));
+      if (block) setCursor(block);
+      else if (++tries < 20) requestAnimationFrame(land);
+    };
+    requestAnimationFrame(land);
+  }
+  return true;
+}
+
+/** Moves the cursor to the block beside it in the same row. */
+function moveAcross(dir: 1 | -1): boolean {
+  const list = blocks();
+  const { i } = at(list);
+  const j = besideIndex(boxes(list), i, dir);
+  if (j < 0) return false;
+  setCursor(list[j]!);
+  return true;
 }
 
 function scrollEnd(dir: 1 | -1, from: Element | null = keysRoot().firstElementChild) {
