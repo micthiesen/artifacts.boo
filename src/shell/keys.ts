@@ -166,7 +166,7 @@ function fillHelp(d: HTMLDialogElement) {
   off.addEventListener("click", () => {
     setKeysOn(false);
     d.close();
-    note("Keyboard shortcuts off. Turn them back on in your account menu.");
+    note("Shortcuts off. Turn them back on with Shortcuts in your account menu.");
   });
   foot.append(say, off);
   d.replaceChildren(head, body, foot);

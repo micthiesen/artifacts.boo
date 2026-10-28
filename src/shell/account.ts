@@ -420,7 +420,7 @@ export function mountAccountMenu(slot: HTMLElement, email: string, options: Acco
   keys.setAttribute("role", "menuitemcheckbox");
   keys.className = "account-keys";
   keys.title = "Vim-style keys: j and k move, ? lists them all (this device only)";
-  keys.append("Keyboard shortcuts", Object.assign(document.createElement("kbd"), { textContent: "?" }));
+  keys.append("Shortcuts", Object.assign(document.createElement("kbd"), { textContent: "?" }));
   keys.lastElementChild!.setAttribute("aria-hidden", "true");
   const paintKeys = () => keys.setAttribute("aria-checked", String(keysOn()));
   paintKeys();
@@ -497,7 +497,8 @@ export function mountAccountMenu(slot: HTMLElement, email: string, options: Acco
   });
   // Menu keys: arrows move between items (wrapping), Home and End jump to the ends.
   menu.addEventListener("keydown", (e) => {
-    const items = [...menu.querySelectorAll<HTMLElement>("[role=menuitem], [role=menuitemradio], [role=menuitemcheckbox]")];
+    // Items hidden here (Shortcuts on a touch screen) are skipped.
+    const items = [...menu.querySelectorAll<HTMLElement>("[role=menuitem], [role=menuitemradio], [role=menuitemcheckbox]")].filter((el) => el.getClientRects().length > 0);
     const at = items.indexOf(document.activeElement as HTMLElement);
     // Left and right also step through the notification levels, which sit side by side.
     const sideways = (document.activeElement as HTMLElement | null)?.getAttribute("role") === "menuitemradio";

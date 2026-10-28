@@ -66,7 +66,10 @@ export function run(cmd: Cmd, n: number) {
     case "bottom": {
       const list = blocks();
       if (!list.length) return scrollEnd(cmd === "top" ? -1 : 1);
-      return setCursor(cmd === "top" ? list[0]! : list[list.length - 1]!, true);
+      const el = cmd === "top" ? list[0]! : list[list.length - 1]!;
+      setCursor(el, true);
+      // The very top or bottom of the page, not just the first or last block's.
+      return scrollEnd(cmd === "top" ? -1 : 1, el);
     }
     case "nextSection":
     case "prevSection":
@@ -242,7 +245,12 @@ function step(dir: 1 | -1, n: number) {
       scrollerOf(list[i]!).scrollBy({ top: (dir * innerHeight) / 3, behavior: "instant" });
       continue;
     }
-    i = Math.max(0, Math.min(list.length - 1, i + dir));
+    // At the first or last block, one more press goes the rest of the way: the very top or bottom of the page.
+    if (i + dir < 0 || i + dir >= list.length) {
+      if (list[i] !== cursor) setCursor(list[i]!);
+      return scrollEnd(dir, list[i]!);
+    }
+    i += dir;
   }
   if (list[i] !== cursor) setCursor(list[i]!);
 }
@@ -278,8 +286,9 @@ function sideways(dir: 1 | -1, n: number) {
   if (box.scrollLeft === was) note(dir > 0 ? "At the right edge" : "At the left edge");
 }
 
-function scrollEnd(dir: 1 | -1) {
-  scrollerOf(keysRoot().firstElementChild).scrollTo({ top: dir < 0 ? 0 : 1e9, behavior: "instant" });
+function scrollEnd(dir: 1 | -1, from: Element | null = keysRoot().firstElementChild) {
+  const scroller = scrollerOf(from);
+  scroller.scrollTo({ top: dir < 0 ? 0 : (scroller === window ? document.documentElement : (scroller as Element)).scrollHeight, behavior: "instant" });
 }
 
 function section(dir: 1 | -1, n: number) {

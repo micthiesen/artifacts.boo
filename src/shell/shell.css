@@ -1129,6 +1129,8 @@ select.input, select.om-select, .profile select {
 }
 .account-menu .account-keys { display: flex; align-items: center; gap: .5rem; }
 .account-menu .account-keys kbd { margin-left: auto; font-size: 11px; min-width: 1.4em; padding: 0 .3rem; color: var(--muted-fg); }
+/* Keys need a keyboard: on a touch screen without one the row is only clutter. */
+@media (hover: none) and (pointer: coarse) { .account-menu .account-keys { display: none; } }
 
 /* What has been typed so far (3, g) or a short note, in the corner: vim's showcmd. */
 .keys-showcmd {
