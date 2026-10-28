@@ -415,7 +415,7 @@ ${fact("Live pages, not static HTML", "State, people and data are part of the pa
 ${fact("An edit-and-check loop for agents", "Agents change artifacts the way they change code, and find out when they broke something.", [
   "Ranged reads, grep, exact find-and-replace edits and JSON Patch, with version guards against stale writes",
   "Imports, components and syntax validated before anything is saved",
-  "Every write rendered in a headless browser; runtime errors and a screenshot come back in the tool result",
+  "Saves rendered in a headless browser (within the plan's daily checks); runtime errors and a screenshot come back in the tool result",
 ])}
 ${fact("People answer, agents close the loop", "An artifact can ask for a decision and get it back, not just be read.", [
   "Approvals, form responses and comments anchored to exact text, each signed with the person's verified email",
@@ -651,7 +651,7 @@ export function continuePage(location: string, headers: Headers = new Headers())
 
 export type PolicyKind = "privacy" | "terms" | "security";
 
-export const POLICY_UPDATED = "2026-10-18";
+export const POLICY_UPDATED = "2026-10-28";
 
 /** Plans and prices (only while billing is on). A workspace pays; people you share with never do. */
 export function pricingPage(brand: Brand, selfServe: boolean, viewer?: { email: string; operator: boolean }): Response {
@@ -672,16 +672,16 @@ export function pricingPage(brand: Brand, selfServe: boolean, viewer?: { email: 
 ${plan("Free", `$0 <span class="muted">/ workspace</span>`, "For trying it out, or a small personal workspace.", [
   `${free.artifacts} artifacts (archived ones count; delete to make room) and ${free.members} members`,
   `${gb(free.bytes!)} of storage, ${free.changesPerDay} saves, ${free.checksPerDay} render checks and ${free.emailsPerDay} emails a day (${free.inviteEmailsPerDay} kept for invitations and shares)`,
-  "Guests, approvals, forms, comments and MCP events, with no limit",
+  "Guests, approvals, forms, comments and MCP events included (storage, size and rate limits apply)",
 ], selfServe ? `<a class="button secondary" href="/workspaces">Start free</a>` : `<p class="muted small">New workspaces are by invitation for now.</p>`)}
 ${plan("Team", `$${TEAM_PRICE.amount} <span class="muted">/ workspace / ${TEAM_PRICE.period}</span>`, "For a team that publishes and decides with its agents every day.", [
-  "No artifact or member limit",
+  "No limit on the number of artifacts or members (storage and daily limits apply)",
   `${gb(team.bytes!)} of storage, ${team.changesPerDay!.toLocaleString("en-US")} saves, ${team.checksPerDay.toLocaleString("en-US")} render checks and ${team.emailsPerDay.toLocaleString("en-US")} emails a day`,
-  "Guests, approvals, forms, comments and MCP events, with no limit",
+  "Guests, approvals, forms, comments and MCP events included (storage, size and rate limits apply)",
 ], `<a class="button" href="/workspaces">Choose a workspace to upgrade</a>`)}
 </section>
 <section class="pricing-notes muted">
-<p><strong>No lock-in.</strong> Admins can download everything at any time, and the <a href="${REPO}">source</a> runs on your own Cloudflare account.</p>
+<p><strong>No lock-in.</strong> Admins can download the latest backup of their workspace from its settings, in a <a href="${REPO}/blob/main/docs/EXPORT.md">documented format</a>, and ask for a fresh one once an hour. The <a href="${REPO}">source</a> runs on your own Cloudflare account.</p>
 <p>The person who pays can <strong>cancel any time</strong> from the workspace's settings. Team stays until the end of the period you paid for, then the workspace moves to Free and keeps everything.</p>
 <p>Payments are handled by Creem, our merchant of record: they're the seller on your invoice and handle sales tax and VAT. Prices are in US dollars, plus tax where it applies. See the <a href="/terms">terms</a> for refunds.</p>
 <p>To keep throwaway workspaces from being used for spam, a new Free workspace's first day has no public links and only a few invitation and share emails. Sharing with people works from the start.</p>
@@ -713,12 +713,12 @@ export function policyPage(kind: PolicyKind, brand: Brand, contact: string, paid
 <li><strong>Guest visits</strong>: which workspaces you've opened a shared artifact in as a guest, and when you last did, so they show up in your workspaces list.</li>
 <li><strong>Agent access</strong>: OAuth grants and personal agent tokens, stored only as hashes, with when each was last used.</li>
 <li><strong>Notification settings</strong>: whether you want emails, and any channels you add (browser push subscriptions, Pushover user keys, ntfy topics and tokens, webhook URLs and their signing secrets).</li>
-<li><strong>Render checks</strong>: after each change a headless browser renders the artifact; we keep the result, a screenshot and any errors. Viewers' browsers also report runtime errors (the latest 30 per artifact).</li>
-<li><strong>Sign-in records</strong>: when codes were sent and checked, with your IP address or network, to limit abuse. Kept for an hour.</li>
+<li><strong>Render checks</strong>: after a change, a headless browser normally renders the artifact (within the plan's daily checks; a skipped check is reported to the agent); we keep the result, a screenshot and any errors. Viewers' browsers also report runtime errors (the latest 30 per artifact).</li>
+<li><strong>Sign-in records</strong>: when codes were sent and checked, with your IP address or network, to limit abuse. Used for an hour, and cleared at a later sign-in after that.</li>
 <li><strong>Your inbox</strong>: a copy of each notification for you (what happened, on which artifact, and the start of any comment), your latest 200, for up to 90 days. A notification leaves your inbox when its artifact or workspace is deleted, when you're removed from the workspace or from the artifact's sharing, or when you delete your account.</li>
 <li><strong>Support requests</strong>: what you send us from Help &amp; feedback (or your agent sends for you), and what you chose to include with it (the page you came from, your browser and an error code), kept as a page in our support workspace that only you and we can open, with our replies. We never include what's in your artifacts. You can ask us to delete a request.</li>
 <li><strong>Errors</strong>: when something fails on our side or in our own pages, we keep where (with ids removed), a message with addresses and links taken out, the version and your browser family, counted together with the same errors. Errors inside artifacts go to their owners, not to us.</li>
-<li><strong>Reports</strong>: if you report an artifact, what you wrote and, if you give it, your email go to us by email and into our operations log; your network address is kept for an hour to limit repeat reports. The workspace isn't told who reported it.</li>
+<li><strong>Reports</strong>: if you report an artifact, what you wrote and, if you give it, your email go to us by email and into our operations log; your network address is used for an hour to limit repeat reports, and cleared at a later report after that. The workspace isn't told who reported it.</li>
 <li><strong>Request logs</strong>: Cloudflare keeps the Workers request and error logs for a few days (up to 7), for debugging. They can include workspace addresses and error text, never passwords or codes.</li>
 </ul>
 <h2>In your browser</h2>
@@ -737,13 +737,14 @@ export function policyPage(kind: PolicyKind, brand: Brand, contact: string, paid
 <li><strong>Cloudflare</strong> hosts everything: compute, storage (Durable Objects, R2, KV), email sending, the headless browser for render checks, analytics and logs. Data lives on Cloudflare's network; a workspace's database is placed near where it was first used.</li>
 <li><strong>Creem</strong> (payments, for paid plans): the merchant of record, which processes payments and handles tax; it receives the billing details you give at checkout.</li>
 <li><strong>Services you choose</strong>: if you add Pushover, ntfy, a webhook or browser push, notifications go to that service. Live data sources are fetched from the hosts your workspace approved.</li>
+<li><strong>Your AI clients</strong>: an agent or MCP client you connect receives what it asks for within its access: content, screenshots, comments and activity. What its provider does with that is covered by their own terms, not ours; we don't train models on your data.</li>
 </ul>
 <h2>How long we keep it</h2>
 <ul>
 <li>As long as the artifact or workspace exists. Deleting an artifact removes it from the live database at once.</li>
-<li>Each workspace is backed up nightly when it changed; up to 30 backups are kept (7 on Free), so deleted data leaves backups within about a month.</li>
-<li>Deleting a workspace deletes its data and its backups, the notifications about it in people's inboxes, and ends its agents' access. Our directory's records about it (members, notifications and billing ids) leave our backups within about a month, and payment entries about it in our operations log stay until they roll off.</li>
-<li>Accounts are backed up the same way: your email, name, passkeys, notification channels (with their keys and secrets), memberships, guest visits, inbox and billing records. The newest 30 backups are kept, so after you delete your account these leave backups within about a month.</li>
+<li>Each workspace is backed up nightly when it changed. Backups are kept for up to 35 days, at most 30 of them (7 on Free), so deleted data leaves backups within about five weeks. The newest backup is kept however old it is: it was made after the last change, so it holds nothing deleted before that.</li>
+<li>Deleting a workspace deletes its data and its backups, the notifications about it in people's inboxes, and ends its agents' access. Our directory's records about it (members, notifications and billing ids) leave our backups within about five weeks, and payment entries about it in our operations log stay until they roll off.</li>
+<li>Accounts are backed up the same way: your email, name, passkeys, notification channels (with their keys and secrets), memberships, guest visits, inbox and billing records. Their backups are kept for up to 35 days, so after you delete your account these leave backups within about five weeks.</li>
 <li>A workspace's billing record (its subscription's status, and the payer's email) is kept while the workspace exists, and in payment log entries until they roll off.</li>
 <li>After you delete your account, your address stays in two places, to limit abuse: our record of who made which self-serve workspaces (so the free plan can't be farmed), and in the list of people removed from each workspace you left (so joining by email domain doesn't add you back).</li>
 <li>What you did in a workspace stays there under your address after you delete your account, until an admin removes it or the workspace is deleted: your comments, votes, approvals and form responses, and the artifact's activity log.</li>
@@ -751,7 +752,7 @@ export function policyPage(kind: PolicyKind, brand: Brand, contact: string, paid
 <li>Our operations log (sign-ups, billing changes, reports and failures, with workspace names and sometimes an email address) keeps its latest 500 entries.</li>
 </ul>
 <h2>Your choices</h2>
-<p>Turn email notifications off in your account. Leave a workspace from its notifications page, or ask the owner or an admin to remove you from an artifact or workspace. Delete your account from your account page: it removes you from every workspace, and your name, notification channels and passkeys (comments you wrote stay in their workspaces, under your address, until an admin there removes them). Workspace admins can download a full export of their workspace from its settings at any time. To get a copy of your own data, or to have anything else deleted, email ${mail}; we reply within 30 days.</p>
+<p>Turn email notifications off in your account. Leave a workspace from its notifications page, or ask the owner or an admin to remove you from an artifact or workspace. Delete your account from your account page: it removes you from every workspace, and your name, notification channels and passkeys (comments you wrote stay in their workspaces, under your address, until an admin there removes them). Workspace admins can download their workspace's latest backup from its settings, and ask for a fresh one once an hour. To get a copy of your own data, or to have anything else deleted, email ${mail}; we reply within 30 days.</p>
 <h2>Changes</h2>
 <p>We'll update this page when what we do changes, and change the date below.</p>`,
     },
@@ -760,7 +761,7 @@ export function policyPage(kind: PolicyKind, brand: Brand, contact: string, paid
       body: `
 <p>These terms cover using ${escapeHtml(brand.apex.replace(/^https:\/\//, ""))}, run by Michael Thiesen. Using the service means you accept them. Questions: ${mail}.</p>
 <h2>Your content</h2>
-<p>You own what you and your agents put in ${PRODUCT}. You let us store it, render it and show it to the people you share it with, only to run the service. You're responsible for what your agents create and share in your name, and for having the right to share it.</p>
+<p>You keep whatever rights you have in what you and your agents put in ${PRODUCT}. You let us store it, process it, render it and show it to the people you share it with, only to run the service as these terms and our <a href="/privacy">privacy page</a> describe. You're responsible for what your agents create and share in your name, and for having the right to share it.</p>
 <h2>Acceptable use</h2>
 <ul>
 <li>No unlawful content, malware, phishing, or content that infringes others' rights.</li>
@@ -771,7 +772,7 @@ export function policyPage(kind: PolicyKind, brand: Brand, contact: string, paid
 <h2>Workspaces and accounts</h2>
 <p>Workspace admins decide who belongs to a workspace and can manage everything in it. We may suspend or delete a workspace or content that breaks these terms, or to protect the service and its users, telling the admins where we can.</p>
 <h2>Your data</h2>
-<p>Workspace admins can download everything in their workspace at any time, from its settings, in a documented format. If you stop using ${PRODUCT}, you keep your data.</p>
+<p>Workspace admins can download their workspace's latest backup from its settings, in a <a href="${REPO}/blob/main/docs/EXPORT.md">documented format</a>, and ask for a fresh backup once an hour; changes since the latest backup aren't in it until the next one. If you stop using ${PRODUCT}, you keep your data.</p>
 <h2>Plans and prices</h2>
 ${
   paid
@@ -780,7 +781,7 @@ ${
     : `<p>${PRODUCT} is free while it's in early access. If we introduce paid plans, workspace admins hear about it at least 30 days before anything they use costs money, and nothing is charged without their agreement. People you share artifacts with as guests won't need a paid plan.</p>`
 }
 <h2>Payments and refunds</h2>
-<p>${paid ? "Team is" : "When paid plans are offered, they're"} sold by Creem, our merchant of record, which processes the payment and handles sales tax and VAT; their terms cover the purchase itself. A paid plan renews each period until the person who pays cancels it from the workspace's settings, and stays in place until the end of the period already paid for. If a payment fails, the workspace keeps Team for up to 14 days after its period ends while the card is retried, then moves to Free. If you were charged by mistake, or ask within 14 days of your first payment, we'll refund it in full: email us.</p>
+<p>${paid ? "Team is" : "When paid plans are offered, they're"} sold by Creem, our merchant of record, which processes the payment and handles sales tax and VAT; their <a href="https://www.creem.io/buyer-terms">buyer terms</a> cover the purchase itself. A paid plan renews each period until the person who pays cancels it from the workspace's settings, and stays in place until the end of the period already paid for. If a payment fails, the workspace keeps Team for up to 14 days after its period ends while the card is retried, then moves to Free. If you were charged by mistake, or ask within 14 days of a workspace's first payment, we'll refund it in full: email us. Nothing here limits rights the law gives you.</p>
 <h2>The source code</h2>
 <p>The software behind ${PRODUCT} is published under the <a href="${REPO}/blob/main/LICENSE.md">Functional Source License</a>, which covers the code itself. These terms cover the hosted service.</p>
 <h2>The service</h2>
@@ -809,8 +810,8 @@ ${
 <h2>Data</h2>
 <ul>
 <li>Everything is served over HTTPS with HSTS. Data is stored on Cloudflare (Durable Objects, R2, KV), encrypted at rest by Cloudflare.</li>
-<li>Nightly backups to R2, up to 30 kept (7 on Free). A restore loads everything first and swaps it in at once, so it never leaves data half-replaced.</li>
-<li>Live data is only fetched from hosts a workspace admin approved, over HTTPS, without credentials.</li>
+<li>Nightly backups to R2 when a workspace changed, kept up to 35 days (at most 30, 7 on Free; the newest is always kept). A restore loads everything first and swaps it in at once, so it never leaves data half-replaced.</li>
+<li>Live data is only fetched from hosts a workspace admin approved, over HTTPS. We add no cookies or sign-in headers, and a source URL can't carry a username or password; a token in its query string is sent as written, so treat such a URL like a password.</li>
 <li>See <a href="/privacy">Privacy</a> for what's stored, who handles it and for how long.</li>
 </ul>
 <h2>Subprocessors</h2>

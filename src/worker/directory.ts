@@ -1182,7 +1182,7 @@ export class Directory extends DurableObject {
     try {
       const r = await stepBackup(this.bucket, BACKUP_ROOT, DIRECTORY_TABLES, (t, after) => this.exportPage(t, after), startBackup(), this.schemaVersion(), Infinity);
       if (!("done" in r)) throw new Error("backup didn't finish");
-      await pruneBackups(this.bucket, BACKUP_ROOT, BACKUPS_KEEP);
+      await this.pruneBackups();
       return `${BACKUP_ROOT}/${r.done.run}/`;
     } catch (err) {
       const retry = Math.min(Number(due ?? Infinity), Date.now() + 3600_000);
@@ -1226,6 +1226,34 @@ export class Directory extends DurableObject {
     this.sql.exec(`DELETE FROM inbox WHERE at < ?`, inboxSince());
     const due = this.sql.exec(`SELECT value FROM settings WHERE key = 'backup_due_at'`).toArray()[0];
     if (due && Number(due.value) <= Date.now()) await this.backup();
+    const prune = this.sql.exec(`SELECT value FROM settings WHERE key = 'backup_prune_at'`).toArray()[0];
+    if (prune && Number(prune.value) <= Date.now()) await this.pruneBackups();
+    // A backup's alarm may have taken the place of the expiry's: put it back.
+    const next = this.sql.exec(`SELECT MIN(CAST(value AS INTEGER)) AS t FROM settings WHERE key IN ('backup_due_at', 'backup_prune_at')`).one().t as number | null;
+    if (next !== null) await this.armAt(next);
+  }
+
+  /** Drop backups past their count or age, and come back when the oldest one left expires, even if nothing changes. */
+  private async pruneBackups() {
+    if (!this.bucket) return;
+    let next: number | null;
+    try {
+      next = await pruneBackups(this.bucket, BACKUP_ROOT, BACKUPS_KEEP);
+    } catch (err) {
+      console.error(JSON.stringify({ ops: "prune_failed", slug: "directory", message: (err as Error).message }));
+      next = Date.now() + 86400_000;
+    }
+    if (next === null) this.sql.exec(`DELETE FROM settings WHERE key = 'backup_prune_at'`);
+    else {
+      this.sql.exec(`INSERT INTO settings (key, value) VALUES ('backup_prune_at', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value`, String(next));
+      await this.armAt(next);
+    }
+  }
+
+  /** Wake at `at` unless the alarm is already due sooner. */
+  private async armAt(at: number) {
+    const existing = await this.ctx.storage.getAlarm();
+    if (existing === null || existing > at || existing < Date.now()) await this.ctx.storage.setAlarm(Math.max(at, Date.now() + 1000));
   }
 
   private schemaVersion(): number {

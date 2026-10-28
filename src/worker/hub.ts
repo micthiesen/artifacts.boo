@@ -1640,6 +1640,11 @@ export class Workspace extends DurableObject {
     if (this.setting("inbox_forget_due")) await step("inbox cleanup", () => this.forgetInbox([]));
     const backupAt = Number(this.setting("backup_due_at") ?? NaN);
     if (backupAt <= Date.now() && !this.job()) this.queueJobs([{ kind: "backup" }]);
+    // Old backups expire even when nothing changes (a backup prunes too, but a quiet workspace makes none).
+    const pruneAt = Number(this.setting("backup_prune_at") ?? NaN);
+    if (pruneAt <= Date.now() && !this.job() && this.hubEnv.BACKUPS) {
+      await step("backup expiry", () => this.pruneBackups(this.hubEnv.BACKUPS!, this.info().slug, JSON.parse(this.setting("jobs_next") ?? "[]") as QueuedJob[]));
+    }
     await step("render check", async () => {
       const next = this.sql.exec(`SELECT artifact_id, origin FROM checks WHERE status = 'queued' ORDER BY at LIMIT 1`).toArray()[0];
       if (!next || Date.now() < this.nextCheckAt) return;
@@ -1697,6 +1702,8 @@ export class Workspace extends DurableObject {
     if (events !== null) times.push(events);
     const backup = this.setting("backup_due_at");
     if (backup) times.push(Number(backup));
+    const prune = this.setting("backup_prune_at");
+    if (prune) times.push(Number(prune));
     const job = this.job();
     if (job && job.kind !== "import") times.push(job.retryAt ? Date.parse(job.retryAt) : Date.now());
     else if (!job && this.setting("jobs_next")) times.push(Date.now());
@@ -2221,7 +2228,7 @@ export class Workspace extends DurableObject {
         this.setJob(null);
         // Tidying up afterwards can't undo a finished backup.
         const pending = JSON.parse(this.setting("jobs_next") ?? "[]") as QueuedJob[];
-        await pruneBackups(bucket, slug, this.planId() === "free" ? BACKUPS_KEEP_FREE : BACKUPS_KEEP, pending.flatMap((q) => (q.kind === "restore" ? [q.run] : []))).catch((err) => console.error(JSON.stringify({ ops: "prune_failed", slug, message: (err as Error).message })));
+        await this.pruneBackups(bucket, slug, pending);
         await this.reportJob();
         return true;
       }
@@ -2347,6 +2354,22 @@ export class Workspace extends DurableObject {
       await this.reportJob();
     } catch (err) {
       console.error(JSON.stringify({ ops: "resync_failed", slug, message: (err as Error).message }));
+    }
+  }
+
+  /**
+   * Drop backups past their count or age (keeping any a queued restore needs), and remember when the oldest
+   * one left expires, so the alarm comes back for it then. Failing here can't undo a finished backup.
+   */
+  private async pruneBackups(bucket: R2Bucket, slug: string, pending: QueuedJob[]) {
+    try {
+      const keep = this.planId() === "free" ? BACKUPS_KEEP_FREE : BACKUPS_KEEP;
+      const next = await pruneBackups(bucket, slug, keep, pending.flatMap((q) => (q.kind === "restore" ? [q.run] : [])));
+      this.setSetting("backup_prune_at", next === null ? null : String(next));
+    } catch (err) {
+      console.error(JSON.stringify({ ops: "prune_failed", slug, message: (err as Error).message }));
+      // Try again tomorrow rather than at once on every alarm.
+      this.setSetting("backup_prune_at", String(Date.now() + 86400_000));
     }
   }
 

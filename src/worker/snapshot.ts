@@ -154,16 +154,37 @@ async function finishBackup(bucket: R2Bucket, root: string, c: BackupCursor, sch
   return manifest;
 }
 
-/** Keep the newest `keep` complete runs; drop older ones, and incomplete runs over a day old. */
-export async function pruneBackups(bucket: R2Bucket, root: string, keep: number, alsoKeep: string[] = []) {
+/**
+ * How long a backup is kept, so what you delete leaves backups within about a month. The newest complete run
+ * is always kept, however old: a workspace nobody has changed in months still has its one backup, and that run
+ * was taken after the last change, so it holds nothing deleted before it.
+ */
+export const BACKUP_MAX_AGE_MS = 35 * 86400_000;
+
+/** When a run was taken, from its id (2026-10-18T100000123Z). */
+export function runTime(run: string): number {
+  const m = /^(\d{4}-\d{2}-\d{2})T(\d{2})(\d{2})(\d{2})(\d{3})Z$/.exec(run);
+  return m ? Date.parse(`${m[1]}T${m[2]}:${m[3]}:${m[4]}.${m[5]}Z`) : NaN;
+}
+
+/**
+ * Keep the newest `keep` complete runs that are under BACKUP_MAX_AGE_MS old (and always the newest one, and
+ * `alsoKeep`: runs a queued restore needs); drop the rest, and incomplete runs over a day old. Returns when
+ * the oldest run kept will be too old, so the caller can come back then even if nothing changes meanwhile,
+ * or null when there's nothing left to expire.
+ */
+export async function pruneBackups(bucket: R2Bucket, root: string, keep: number, alsoKeep: string[] = [], now = Date.now()): Promise<number | null> {
   const runs = await listRuns(bucket, root);
   const complete = await completeRuns(bucket, root, runs);
-  const kept = new Set([...complete.slice(0, keep), ...alsoKeep]);
-  const dayAgo = newRun(new Date(Date.now() - 86400_000));
+  const fresh = complete.slice(0, keep).filter((run, i) => i === 0 || runTime(run) > now - BACKUP_MAX_AGE_MS);
+  const kept = new Set([...fresh, ...alsoKeep]);
+  const dayAgo = newRun(new Date(now - 86400_000));
   for (const run of runs) {
     if (kept.has(run)) continue;
     if (complete.includes(run) || run < dayAgo) await deletePrefix(bucket, `${root}/${run}/`);
   }
+  const expiries = fresh.slice(1).map((run) => runTime(run) + BACKUP_MAX_AGE_MS).filter((t) => Number.isFinite(t));
+  return expiries.length ? Math.min(...expiries) : null;
 }
 
 /** Complete runs under <root>/, newest first. */
