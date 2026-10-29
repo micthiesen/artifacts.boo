@@ -185,7 +185,7 @@ test("links between artifacts: Linked from and link titles, only among what each
   const a = await h.hub.create({ title: "Library", files: { "index.mdx": `# Library\n\n- https://acme.artifacts.test/a/${b.id}#n-1\n- [Again](/a/${b.id})\n` }, owner: ADMIN });
   if (!a.ok) throw new Error("create");
   const forB = h.hub.openArtifact(b.id, ADMIN, false) as { backlinks: { id: string; title: string }[] };
-  expect(forB.backlinks).toEqual([{ id: a.id, title: "Library" }]);
+  expect(forB.backlinks).toEqual([{ id: a.id, title: "Library", updatedAt: expect.any(String) }]);
   const forA = h.hub.openArtifact(a.id, ADMIN, false) as { linkTitles: Record<string, string> };
   expect(forA.linkTitles).toEqual({ [b.id]: "Recipes" });
   // Someone who can open the recipes but not the library doesn't learn it links there.
@@ -193,6 +193,12 @@ test("links between artifacts: Linked from and link titles, only among what each
   expect((h.hub.openArtifact(b.id, "guest@else.example", false) as { backlinks: unknown[] }).backlinks).toEqual([]);
   // A presigned link learns nothing about other artifacts.
   expect("backlinks" in (h.hub.openArtifact(b.id, ADMIN, true) as object)).toBe(false);
+  // A <Collection> shows each page's description; an archived page drops out until it's back.
+  h.hub.updateMeta(a.id, { description: "Everything kept" });
+  expect((h.hub.openArtifact(b.id, ADMIN, false) as { backlinks: unknown[] }).backlinks).toEqual([expect.objectContaining({ id: a.id, description: "Everything kept" })]);
+  h.hub.updateMeta(a.id, { archived: true });
+  expect((h.hub.openArtifact(b.id, ADMIN, false) as { backlinks: unknown[] }).backlinks).toEqual([]);
+  h.hub.updateMeta(a.id, { archived: false });
   // Editing the link away, or deleting the linking artifact, removes it.
   await h.hub.writeFiles(a.id, { "index.mdx": "# Library\n" });
   expect((h.hub.openArtifact(b.id, ADMIN, false) as { backlinks: unknown[] }).backlinks).toEqual([]);

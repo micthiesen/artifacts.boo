@@ -2,7 +2,7 @@
 // here through useSyncExternalStore; the runtime feeds it ShellMessages and it
 // sends FrameMessages back through a pluggable transport (window.parent in the
 // frame, a fake in tests).
-import type { FrameBoot, FrameMessage, JsonValue, Viewer } from "../shared/protocol.ts";
+import type { Backlink, FrameBoot, FrameMessage, JsonValue, Viewer } from "../shared/protocol.ts";
 import { SHARED_VALUE_MAX_BYTES } from "../shared/protocol.ts";
 
 export type Theme = "light" | "dark";
@@ -16,7 +16,7 @@ let viewer: Viewer = ANON;
 let shared: Record<string, JsonValue> = {};
 let local: Record<string, JsonValue> = {};
 let presence: string[] = [];
-let links: { backlinks: { id: string; title: string }[]; linkTitles: Record<string, string> } = { backlinks: [], linkTitles: {} };
+let links: { backlinks: Backlink[]; linkTitles: Record<string, string> } = { backlinks: [], linkTitles: {} };
 let theme: Theme = "light";
 let initialized = false;
 let version = 0;
@@ -83,7 +83,7 @@ export function init(msg: {
   shared: Record<string, JsonValue>;
   presence: string[];
   theme: Theme;
-  backlinks?: { id: string; title: string }[];
+  backlinks?: Backlink[];
   linkTitles?: Record<string, string>;
 }) {
   viewer = msg.viewer ?? ANON;

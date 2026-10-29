@@ -67,6 +67,7 @@ import {
   SHARED_STATE_MAX_BYTES,
   SHARED_VALUE_MAX_BYTES,
   type Anchor,
+  type Backlink,
   type JsonValue,
   type Person,
   type Role,
@@ -2035,17 +2036,19 @@ export class Workspace extends DurableObject {
    * Artifacts linking here, and the titles of those this one links to, among those this person can open
    * (anyone else sees the bare link, and doesn't learn the page exists).
    */
-  private linksFor(id: string, email: string | null): { backlinks: { id: string; title: string }[]; linkTitles: Record<string, string> } {
+  private linksFor(id: string, email: string | null): { backlinks: Backlink[]; linkTitles: Record<string, string> } {
     const visible = (other: string) => this.roleFor(other, email) !== null;
     // Filtered after reading, so read more than are shown: most linkers are usually visible.
     const backlinks = this.sql
-      .exec(`SELECT a.id, a.title FROM links l JOIN artifacts a ON a.id = l.artifact_id WHERE l.to_id = ? AND a.archived_at IS NULL ORDER BY a.updated_at DESC LIMIT 200`, id)
+      .exec(`SELECT a.id, a.title, substr(a.description, 1, 200) AS description, a.updated_at FROM links l JOIN artifacts a ON a.id = l.artifact_id WHERE l.to_id = ? AND a.archived_at IS NULL ORDER BY a.updated_at DESC LIMIT 400`, id)
       .toArray()
       .filter((r) => visible(r.id as string))
-      .slice(0, 50)
-      .map((r) => ({ id: r.id as string, title: r.title as string }));
+      // A hub's <Collection> lists them all; 200 pages is more than any hub should hold.
+      .slice(0, 200)
+      .map((r) => ({ id: r.id as string, title: r.title as string, description: (r.description as string) || undefined, updatedAt: r.updated_at as string }));
     const linkTitles: Record<string, string> = {};
-    for (const r of this.sql.exec(`SELECT a.id, a.title FROM links l JOIN artifacts a ON a.id = l.to_id WHERE l.artifact_id = ? LIMIT 200`, id)) {
+    // As many as a hub's <Collection unlisted> may need to tell placed pages from new ones.
+    for (const r of this.sql.exec(`SELECT a.id, a.title FROM links l JOIN artifacts a ON a.id = l.to_id WHERE l.artifact_id = ? LIMIT 400`, id)) {
       if (visible(r.id as string)) linkTitles[r.id as string] = r.title as string;
     }
     return { backlinks, linkTitles };

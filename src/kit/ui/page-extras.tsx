@@ -9,6 +9,7 @@ import { cn, displayName, humanize, slugify } from "./utils.ts";
 import { formatValue, useRows } from "./table.tsx";
 import { ChevronRight } from "./icons.ts";
 import { moveAfterRender, useArrivals } from "../feedback.ts";
+import { relativeTime } from "../../shared/time.ts";
 
 /** A page with at least this many sections gets a contents list under its title. */
 const CONTENTS_MIN_SECTIONS = 4;
@@ -138,11 +139,77 @@ export function TaskCheckbox({ checked }: { checked?: boolean }) {
   );
 }
 
+// A page with a <Collection> already lists what links to it, so the "Linked from" footer stands down.
+let collections = 0;
+const collectionListeners = new Set<() => void>();
+const onCollections = (cb: () => void) => (collectionListeners.add(cb), () => collectionListeners.delete(cb));
+const countCollections = () => collections;
+
+/**
+ * A hub page's contents, kept current by itself: every open artifact that links to this page (and that the
+ * viewer can open), newest change first, with its description. Pages join by linking here ("← Your library"),
+ * and archived ones drop out, so the hub never has to be edited to stay complete.
+ */
+export function Collection({
+  title,
+  empty,
+  sort = "updated",
+  unlisted,
+}: {
+  title?: React.ReactNode;
+  empty?: React.ReactNode;
+  sort?: "updated" | "title";
+  /** Only pages this page doesn't link to yet: on a hand-sorted hub, what still needs a place. */
+  unlisted?: boolean;
+}) {
+  useSyncExternalStore(store.subscribe, store.getBoot);
+  React.useLayoutEffect(() => {
+    collections++;
+    for (const cb of collectionListeners) cb();
+    return () => {
+      collections--;
+      for (const cb of collectionListeners) cb();
+    };
+  }, []);
+  const { backlinks, linkTitles } = store.getLinks();
+  const shown = unlisted ? backlinks.filter((b) => !(b.id in linkTitles)) : backlinks;
+  const rows = sort === "title" ? [...shown].sort((a, b) => a.title.localeCompare(b.title)) : shown;
+  // Nothing left to sort is the point of an unlisted collection: it shows nothing at all then.
+  if (!rows.length && unlisted && empty === undefined) return null;
+  return (
+    <section className="art-collection my-6">
+      {title && <h2 className="mb-2 font-display text-[1.15rem] font-semibold text-balance">{title}</h2>}
+      {rows.length ? (
+        <ul className="divide-y divide-border rounded-xl border border-border bg-card shadow-card">
+          {rows.map((b) => (
+            <li key={b.id} className="px-4 py-3" data-key-stop="">
+              <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5">
+                <a href={`/a/${b.id}`} className="min-w-0 rounded font-medium text-foreground outline-none [overflow-wrap:anywhere] hover:text-primary focus-visible:focus-halo">
+                  {b.title}
+                </a>
+                {b.updatedAt && (
+                  <time dateTime={b.updatedAt} title={b.updatedAt.slice(0, 10)} className="shrink-0 text-[13px] whitespace-nowrap text-muted-foreground tabular-nums">
+                    {relativeTime(b.updatedAt)}
+                  </time>
+                )}
+              </div>
+              {b.description && <p className="mt-0.5 text-[14px] leading-snug text-muted-foreground">{b.description}</p>}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="rounded-xl border border-border px-4 py-3 text-[15px] text-muted-foreground">{empty ?? "Nothing links here yet."}</p>
+      )}
+    </section>
+  );
+}
+
 /** At the end of a markdown page: the artifacts that link to it (those the viewer can open). */
 export function LinkedFrom() {
   useSyncExternalStore(store.subscribe, store.getBoot);
+  const listed = useSyncExternalStore(onCollections, countCollections, () => 0) > 0;
   const { backlinks } = store.getLinks();
-  if (!backlinks.length) return null;
+  if (!backlinks.length || listed) return null;
   return (
     <footer className="art-linked-from mt-16 border-t border-border pt-6">
       <h2 className="mb-3 text-[13px] font-medium tracking-[0.06em] text-muted-foreground uppercase">Linked from</h2>

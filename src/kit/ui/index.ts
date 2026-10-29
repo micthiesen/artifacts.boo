@@ -10,7 +10,7 @@ import { markdownComponents } from "./mdx.tsx";
 import * as primitives from "./primitives.tsx";
 import { Table } from "./table.tsx";
 import { Ledger } from "./ledger.tsx";
-import { SourceRecords } from "./page-extras.tsx";
+import { Collection, SourceRecords } from "./page-extras.tsx";
 import { SupportCase } from "./support.tsx";
 import { AsOf, Cite, Claim, Sources } from "./evidence.tsx";
 import { BulletBar, Delta } from "./numbers.tsx";
@@ -33,7 +33,7 @@ export type { DiffProps } from "./diff.tsx";
 export { ChangeGuide } from "./change-guide.tsx";
 export { Poll, Checklist, Comments, Notes, Approval, Form } from "./collab.tsx";
 export { Ledger } from "./ledger.tsx";
-export { SourceRecords } from "./page-extras.tsx";
+export { Collection, SourceRecords } from "./page-extras.tsx";
 export { Sources, Cite, AsOf, Claim } from "./evidence.tsx";
 export type { Source, SourceKind, ClaimStatus } from "./evidence.tsx";
 export { Delta, BulletBar } from "./numbers.tsx";
@@ -78,6 +78,7 @@ const kitComponents = {
   Form,
   Ledger,
   SourceRecords,
+  Collection,
   SupportCase,
   Sources,
   Cite,

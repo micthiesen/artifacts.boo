@@ -56,8 +56,8 @@ export type ShellMessage =
       /** Emails currently viewing (presence). */
       presence: string[];
       theme: "light" | "dark";
-      /** Artifacts linking here that this viewer can open, for the "Linked from" footer. */
-      backlinks?: { id: string; title: string }[];
+      /** Artifacts linking here that this viewer can open, for the "Linked from" footer and <Collection>. */
+      backlinks?: Backlink[];
       /** Titles of the artifacts this one links to (that this viewer can open), by id, so links can read as titles. */
       linkTitles?: Record<string, string>;
       /** The viewer turned Sounds on for this device. */
@@ -213,7 +213,7 @@ export type ShellBoot = {
   archivedAt?: string;
   /** Origin of the apex, where account settings live. */
   apex: string;
-  backlinks?: { id: string; title: string }[];
+  backlinks?: Backlink[];
   linkTitles?: Record<string, string>;
   /** The viewer is a member of this workspace (not just a guest). */
   member: boolean;
@@ -226,3 +226,6 @@ export type ShellBoot = {
 };
 
 export type WatchLevel = "all" | "participating" | "mute";
+
+/** An open artifact that links to this one, newest change first. */
+export type Backlink = { id: string; title: string; description?: string; updatedAt?: string };
