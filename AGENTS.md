@@ -72,11 +72,16 @@ check new UI against them.
 
 **Keys.** Vim-style keys are on by default and invisible until used
 (`src/shared/keys.ts` has the keymap and the rules; `src/kit/keys.ts` is the
-frame, `src/shell/keys.ts` the shell and key sheet). A new widget that takes
-letter or arrow keys gets the matching `role` (listbox, grid, slider, tablist,
-menu, dialog) or handles its keys with `preventDefault()`, so the keys leave
-it alone. Nothing destructive goes on a single key without Undo, and the
-key sheet (`?`) is built from `KEYMAP`, so a new key goes there.
+frame, `src/kit/keys-page.ts` what they do to the page, `src/shell/keys.ts`
+the shell and key sheet). A new widget that takes letter or arrow keys gets
+the matching `role` (listbox, grid, slider, tablist, menu, dialog) or handles
+its keys with `preventDefault()`, so the keys leave it alone. Nothing
+destructive goes on a single key without Undo, and the key sheet (`?`) is
+built from `KEYMAP`, so a new key goes there. A kit component with structure
+declares where the cursor stops and what h, l and Enter do
+(`src/kit/key-widget.ts`: `data-key-scope`, `data-key-stop`,
+`useKeyWidget`) rather than leaving the keys to guess from its markup;
+`src/kit/keys-page.test.ts` walks laid-out pages, so add a case for it.
 
 **Contrast and focus.**
 

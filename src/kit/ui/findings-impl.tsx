@@ -77,12 +77,12 @@ export default function FindingsImpl({ data: path }: { data: string }) {
   const rollup = statusRollup(g.findings);
 
   return (
-    <div className="art-findings">
+    <div className="art-findings" data-key-scope="">
       <Summary className="mb-3">
-        <p className="text-[15px] leading-normal text-muted-foreground">{g.question}</p>
-        <p>{g.answer}</p>
+        <p className="text-[15px] leading-normal text-muted-foreground" data-key-stop="">{g.question}</p>
+        <p data-key-stop="">{g.answer}</p>
       </Summary>
-      <p className="mb-8 flex flex-wrap gap-x-2 gap-y-1 px-1 text-[14px] text-muted-foreground tabular-nums">
+      <p className="mb-8 flex flex-wrap gap-x-2 gap-y-1 px-1 text-[14px] text-muted-foreground tabular-nums" data-key-stop="">
         {rollup.map((r, i) => (
           <span key={r.status} className="whitespace-nowrap">
             {i > 0 && <span aria-hidden="true" className="mr-2">·</span>}
@@ -96,11 +96,11 @@ export default function FindingsImpl({ data: path }: { data: string }) {
         ))}
       </p>
 
-      <Section title="Impact against effort">
+      <Section title={<KeyHeading>Impact against effort</KeyHeading>}>
         <Diagram code={findingsQuadrant(ranked)} className="my-0 p-3" />
       </Section>
 
-      <Section title="Findings">
+      <Section title={<KeyHeading>Findings</KeyHeading>}>
         <ol className="divide-y divide-border rounded-xl border border-border bg-card shadow-card">
           {ranked.map((f, i) => (
             <FindingRow key={f.id} f={f} rank={i + 1} />
@@ -110,7 +110,7 @@ export default function FindingsImpl({ data: path }: { data: string }) {
 
       {g.notWorth && g.notWorth.length > 0 && (
         <details className="mt-8 rounded-xl border border-border">
-          <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 rounded-xl px-4 py-2.5 font-semibold outline-none focus-visible:focus-halo [&::-webkit-details-marker]:hidden">
+          <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 rounded-xl px-4 py-2.5 font-semibold outline-none focus-visible:focus-halo [&::-webkit-details-marker]:hidden" data-key-stop="">
             <span>
               Not worth doing <span className="font-normal text-muted-foreground tabular-nums">({g.notWorth.length})</span>
             </span>
@@ -118,7 +118,7 @@ export default function FindingsImpl({ data: path }: { data: string }) {
           </summary>
           <ul className="divide-y divide-border border-t border-border">
             {g.notWorth.map((n, i) => (
-              <li key={i} className="px-4 py-2.5 text-[15px]">
+              <li key={i} className="px-4 py-2.5 text-[15px]" data-key-stop="">
                 <span className="font-medium">{n.title}</span>
                 <span className="block text-muted-foreground">{n.why}</span>
               </li>
@@ -127,14 +127,16 @@ export default function FindingsImpl({ data: path }: { data: string }) {
         </details>
       )}
 
-      <Section title="How this was measured">
+      <Section title={<KeyHeading>How this was measured</KeyHeading>}>
         <Method m={g.method} />
       </Section>
 
       {g.inventory && (
-        <Section title={g.inventory.title}>
+        <Section title={<KeyHeading>{g.inventory.title}</KeyHeading>}>
           {/* A table, not phone cards: an inventory is read across rows, and ten cards of eleven fields is ten screens. */}
-          <Table data={g.inventory.data} columns={g.inventory.columns} limit={g.inventory.top ?? 10} cards="never" className="my-0" />
+          <div data-key-stop="">
+            <Table data={g.inventory.data} columns={g.inventory.columns} limit={g.inventory.top ?? 10} cards="never" className="my-0" />
+          </div>
         </Section>
       )}
     </div>
@@ -147,7 +149,7 @@ function FindingRow({ f, rank }: { f: Finding; rank: number }) {
   return (
     <li id={`finding-${f.id}`} className="scroll-mt-20">
       <details className="group">
-        <summary className="flex cursor-pointer list-none gap-3 rounded-xl px-4 py-3 outline-none focus-visible:focus-halo [&::-webkit-details-marker]:hidden">
+        <summary className="flex cursor-pointer list-none gap-3 rounded-xl px-4 py-3 outline-none focus-visible:focus-halo [&::-webkit-details-marker]:hidden" data-key-stop="">
           <span className="w-5 shrink-0 pt-px text-right text-[15px] font-semibold text-muted-foreground tabular-nums">{rank}</span>
           <span className="flex min-w-0 flex-1 flex-col gap-1.5">
             <span className="flex items-start justify-between gap-2">
@@ -168,9 +170,13 @@ function FindingRow({ f, rank }: { f: Finding; rank: number }) {
             <Field label="Benefit">{f.benefit}</Field>
             {f.validate && <Field label="Validate">{f.validate}</Field>}
           </dl>
-          {f.metrics && f.metrics.length > 0 && <DeltaImpl rows={f.metrics} />}
+          {f.metrics && f.metrics.length > 0 && (
+            <div data-key-stop="">
+              <DeltaImpl rows={f.metrics} />
+            </div>
+          )}
           {(f.owner || f.link) && (
-            <p className="mt-3 flex flex-wrap gap-x-3 gap-y-1 text-[14px] text-muted-foreground">
+            <p className="mt-3 flex flex-wrap gap-x-3 gap-y-1 text-[14px] text-muted-foreground" data-key-stop="">
               {f.owner && <span>Owner: <span className="text-foreground">{f.owner}</span></span>}
               {f.link && <Link href={f.link.url}>{f.link.label}</Link>}
             </p>
@@ -181,13 +187,22 @@ function FindingRow({ f, rank }: { f: Finding; rank: number }) {
   );
 }
 
+/** A Section's title as a stop for the keys: a block filling the heading, so the cursor outlines the whole line. */
+function KeyHeading({ children }: { children: React.ReactNode }) {
+  return (
+    <span className="block" data-key-stop="">
+      {children}
+    </span>
+  );
+}
+
 function Label({ children }: { children: React.ReactNode }) {
   return <span className="text-[12px] tracking-[0.05em] text-muted-foreground uppercase">{children}</span>;
 }
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div>
+    <div data-key-stop="">
       <dt>
         <Label>{label}</Label>
       </dt>
@@ -209,13 +224,13 @@ function Method({ m }: { m: FindingsData["method"] }) {
     <div className="rounded-xl border border-border bg-card shadow-card">
       <dl className="divide-y divide-border/70">
         {facts.map(([label, value]) => (
-          <div key={label} className="grid gap-x-4 gap-y-0.5 px-5 py-2.5 sm:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
+          <div key={label} className="grid gap-x-4 gap-y-0.5 px-5 py-2.5 sm:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]" data-key-stop="">
             <dt className="text-[13px] leading-6 text-muted-foreground sm:text-sm">{label}</dt>
             <dd className={cn("min-w-0 text-[15px] leading-6 break-words", label === "Version" && "font-mono text-[14px]")}>{value}</dd>
           </div>
         ))}
         {m.sources && m.sources.length > 0 && (
-          <div className="grid gap-x-4 gap-y-0.5 px-5 py-2.5 sm:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
+          <div className="grid gap-x-4 gap-y-0.5 px-5 py-2.5 sm:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]" data-key-stop="">
             <dt className="text-[13px] leading-6 text-muted-foreground sm:text-sm">Sources</dt>
             <dd className="min-w-0 text-[15px] leading-6">
               <ul className="flex flex-col gap-1">
@@ -229,7 +244,7 @@ function Method({ m }: { m: FindingsData["method"] }) {
           </div>
         )}
         {m.caveats && m.caveats.length > 0 && (
-          <div className="grid gap-x-4 gap-y-0.5 px-5 py-2.5 sm:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
+          <div className="grid gap-x-4 gap-y-0.5 px-5 py-2.5 sm:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]" data-key-stop="">
             <dt className="text-[13px] leading-6 text-muted-foreground sm:text-sm">Caveats</dt>
             <dd className="min-w-0 text-[15px] leading-6">
               <ul className="list-disc pl-4 marker:text-muted-foreground">

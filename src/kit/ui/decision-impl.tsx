@@ -4,6 +4,7 @@ import * as React from "react";
 import { useShared, useViewer } from "../hooks.ts";
 import { getBoot } from "../store.ts";
 import { cueAfterRender, useArrivals } from "../feedback.ts";
+import { useKeyWidget } from "../key-widget.ts";
 import { Check } from "./icons.ts";
 import { Badge, Button, Textarea } from "./primitives.tsx";
 import { cn, displayName, relativeTime, useNow } from "./utils.ts";
@@ -75,12 +76,27 @@ export default function DecisionImpl({ id, question, options, recommended, decid
   /** The button that had focus goes away (Decide, Keep, Cancel): the keyboard picks up at Change. */
   const focusChange = () => requestAnimationFrame(() => root.current?.querySelector<HTMLElement>("[data-decision-change]")?.focus());
 
+  // Enter on the decision puts the keyboard where it picks up: the current answer while choosing, else Change.
+  useKeyWidget(root, {
+    enter: () => {
+      const el = root.current;
+      if (!el) return false;
+      const target = open
+        ? (el.querySelector<HTMLInputElement>("input[type=radio]:checked:enabled") ?? el.querySelector<HTMLInputElement>("input[type=radio]:enabled"))
+        : (el.querySelector<HTMLElement>("[data-decision-change]") ?? el.querySelector<HTMLElement>('[role="group"] button'));
+      if (!target) return false;
+      target.focus();
+      return el.ownerDocument.activeElement === target;
+    },
+  });
+
   const labelOf = (v: string) => opts.find((o) => o.value === v)?.label ?? v;
   const who = decided?.by ?? (decided ? viewer.email : null);
   const whoName = who && me && who.toLowerCase() === me ? "you" : displayName(who);
 
   return (
-    <div ref={root} className={cn("my-6 rounded-xl border border-border bg-card shadow-card", className)}>
+    // A stop when a recipe's keys scope holds it (Shortlist); standalone, the keys find it as one block anyway.
+    <div ref={root} className={cn("my-6 rounded-xl border border-border bg-card shadow-card", className)} data-key-stop="">
       <div className="flex flex-wrap items-start justify-between gap-3 px-5 pt-4 pb-3">
         <div className="min-w-0">
           <div className="font-semibold text-balance">{question}</div>

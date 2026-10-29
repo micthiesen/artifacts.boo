@@ -129,8 +129,6 @@ export function StepBar({ steps, state, onState }: { steps: readonly DiagramStep
     const can = canMove(state, m, count);
     return {
       "aria-disabled": !can || undefined,
-      // The page's h and l press these (src/kit/keys-page.ts).
-      "data-keys-step": m,
       onClick: () => {
         if (can) move(m);
       },

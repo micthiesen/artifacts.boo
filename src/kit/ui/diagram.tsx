@@ -1,5 +1,6 @@
 import * as React from "react";
-import type { DiagramStep, StepState } from "../../shared/diagram-steps.ts";
+import { canMove, stepTo, type DiagramStep, type StepState } from "../../shared/diagram-steps.ts";
+import { useKeyWidget } from "../key-widget.ts";
 import { ErrorBoundary } from "./error.tsx";
 import { Button, Skeleton } from "./primitives.tsx";
 import { cn } from "./utils.ts";
@@ -27,6 +28,7 @@ export type DiagramProps = {
 };
 
 export type DiagramShow = "before" | "both" | "after";
+const SHOWS: readonly DiagramShow[] = ["before", "both", "after"];
 
 /** Nodes marked `:::added`, `:::changed` or `:::removed` (or `class A added`) make a "what changed" diagram. */
 export const MARKED = /(?::::|\bclass\s+[\w,-]+\s+)(added|changed|removed)\b/;
@@ -51,9 +53,26 @@ function DiagramInner({ code, children, title, className, focus, steps }: Diagra
   const [step, setStep] = React.useState<StepState>({ at: 0, all: false });
   const current = stepped ? steps[Math.min(step.at, steps.length - 1)] : undefined;
   const lit = stepped ? (step.all ? undefined : current?.focus) : focus;
+  // The outer element is a stop when a recipe's keys scope holds it (ignored elsewhere). The page's h and l step through a stepped diagram, or switch Before / Both / After on a marked one.
+  const outer = React.useRef<HTMLElement | null>(null);
+  useKeyWidget(outer, {
+    across: (dir) => {
+      if (stepped) {
+        const m = dir > 0 ? "next" : "prev";
+        if (!canMove(step, m, steps.length)) return false;
+        setStep(stepTo(step, m, steps.length));
+        return true;
+      }
+      if (!marked) return false;
+      const next = SHOWS[SHOWS.indexOf(show) + dir];
+      if (!next) return false;
+      setShow(next);
+      return true;
+    },
+  });
 
   const figure = (
-    <figure className={cn(stepped ? "m-0" : CARD, !stepped && className)} data-speak="diagram">
+    <figure ref={stepped ? undefined : outer} data-key-stop={stepped ? undefined : ""} className={cn(stepped ? "m-0" : CARD, !stepped && className)} data-speak="diagram">
       {title && <figcaption className="mb-3 px-1 text-sm font-medium">{title}</figcaption>}
       {marked && <ShowSwitch show={show} onShow={setShow} />}
       <React.Suspense fallback={<Skeleton className="h-48" />}>
@@ -64,8 +83,7 @@ function DiagramInner({ code, children, title, className, focus, steps }: Diagra
   if (!stepped) return figure;
   // The bar sits outside the figure: Listen reads a figure as "A diagram", and the step's words should be heard.
   return (
-    // data-keys-steps: the page's h and l step through this one diagram (src/kit/keys-page.ts).
-    <div className={cn(CARD, className)} data-keys-steps="">
+    <div ref={outer as React.RefObject<HTMLDivElement | null>} className={cn(CARD, className)} data-key-stop="">
       {figure}
       <React.Suspense fallback={null}>
         <StepBar steps={steps} state={step} onState={setStep} />
@@ -86,8 +104,8 @@ export function ShowSwitch({ show, onShow }: { show: DiagramShow; onShow: (s: Di
       </div>
       <div className="flex items-center gap-2">
         <span id={id} className="text-[13px] text-muted-foreground">Show</span>
-        <div role="group" aria-labelledby={id} data-keys-switch="" className="inline-flex rounded-lg border border-border p-0.5">
-          {(["before", "both", "after"] as const).map((s) => (
+        <div role="group" aria-labelledby={id} className="inline-flex rounded-lg border border-border p-0.5">
+          {SHOWS.map((s) => (
             <Button key={s} size="sm" variant={show === s ? "secondary" : "ghost"} aria-pressed={show === s} onClick={() => onShow(s)} className="h-7 rounded-[6px] px-2.5 capitalize">
               {s}
             </Button>

@@ -11,7 +11,8 @@
 import type { Cmd } from "../shared/keys.ts";
 import { anchorFromRange, blockAnchor, commentAllowed, focusThread, rangeAt, textIndex, threadNodes } from "./annotate.ts";
 import { speakFrom, speakJumpTo } from "./speak.ts";
-import { besideIndex, nextInColumn, type Box } from "./keys-geometry.ts";
+import { rowAcross, rowsOf, rowStep, type Box } from "./keys-geometry.ts";
+import { runKeyWidget } from "./key-widget.ts";
 import { keysMode, keysRoot, note, sendKey as send, setKeysMode, showcmd } from "./keys.ts";
 
 /** What counts as a block. The innermost one is the cursor's stop; the atomic ones are stops whole. */
@@ -51,6 +52,8 @@ document.addEventListener("keydown", (e) => {
 
 export function run(cmd: Cmd, n: number) {
   tabWait++;
+  // Each press reads the page afresh (the last one may have opened, closed or switched something).
+  cached = null;
   // React may have rewritten the cursor block's classes: put the ring back.
   if (cursor?.isConnected && !ring?.classList.contains("art-cursor")) paintCursor(cursor);
   if (keysMode() === "visual") return visual(cmd, n);
@@ -115,19 +118,40 @@ export function escape() {
 
 // ---- blocks and the cursor -------------------------------------------------------------
 
-/** The page's blocks in reading order: innermost ones, atomic ones whole, nothing hidden or of ours. */
+let cached: Element[] | null = null;
+
+/**
+ * The page's stops in reading order. Kit components that know their structure declare them (`data-key-stop`
+ * inside a `data-key-scope`, see src/kit/key-widget.ts); everywhere else they're found by element type: the
+ * innermost blocks, atomic ones whole. Only what can be seen: nothing of ours, nothing of zero size, nothing
+ * inside a closed <details> but its summary (some browsers still give folded content boxes, and a stop there
+ * would be an invisible cursor). Read once per key press.
+ */
 function blocks(): Element[] {
+  if (cached) return cached;
   const root = keysRoot();
-  // Only what can be seen: the inside of a closed <details> (a folded finding, an accordion) still has boxes in
-  // some browsers, and a stop there would be an invisible cursor. Its summary, the part that shows, is a stop.
-  const found = [...root.querySelectorAll(BLOCKS)].filter((el) => !el.closest(SKIP) && !el.parentElement?.closest(ATOMIC) && !folded(el));
-  const containers = new Set<Element>();
-  for (const el of found) for (let up = el.parentElement; up && up !== root; up = up.parentElement) containers.add(up);
-  return found.filter((el) => {
-    if (containers.has(el)) return false;
+  const visible = (el: Element) => {
+    // A declared stop may be one Listen skips (a list of file names); only what's around it can rule it out.
+    const skipped = el.matches("[data-key-stop]") ? el.parentElement?.closest(SKIP) : el.closest(SKIP);
+    if (skipped || folded(el)) return false;
     const r = el.getBoundingClientRect();
     return r.height > 0 && r.width > 0;
-  });
+  };
+  // Declared stops count wherever they are (a Decision on its own is one); what's inside one, or inside a scope,
+  // isn't for the element-type rules.
+  const declared = [...root.querySelectorAll("[data-key-stop]")];
+  const found = [...root.querySelectorAll(BLOCKS)].filter((el) => !el.closest("[data-key-scope], [data-key-stop]") && !el.parentElement?.closest(ATOMIC));
+  // Only what shows decides what's a container, so a block whose insides are all folded or hidden is a stop itself.
+  const candidates = [...found, ...declared].filter(visible);
+  // The innermost win: a stop holding another one (a section around its paragraphs) isn't one itself.
+  const containers = new Set<Element>();
+  for (const el of candidates) for (let up = el.parentElement; up && up !== root; up = up.parentElement) containers.add(up);
+  // Kept for the rest of this key press only: the page can change before the next one.
+  queueMicrotask(() => (cached = null));
+  cached = candidates
+    .filter((el) => !containers.has(el))
+    .sort((a, b) => (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1));
+  return cached;
 }
 
 /** Inside a closed <details> other than its summary, or hidden some other way the browser knows about. */
@@ -251,6 +275,7 @@ function step(dir: 1 | -1, n: number) {
   let { i, fresh } = at(list);
   // The first press shows where you are; a count goes on from there.
   if (fresh) n -= 1;
+  let rows: number[][] | undefined;
   let geometry: Box[] | undefined;
   for (let k = 0; k < n; k++) {
     // A block taller than the screen scrolls through before the cursor moves on.
@@ -262,7 +287,8 @@ function step(dir: 1 | -1, n: number) {
     // Down or up a row: blocks side by side (Stat cells, cards, columns) are crossed with h and l instead.
     // Scrolling moves every box alike, so their layout is read once per press.
     geometry ??= boxes(list);
-    const next = nextInColumn(geometry, i, dir);
+    rows ??= rowsOf(geometry);
+    const next = rowStep(rows, geometry, i, dir);
     // At the first or last block, one more press goes the rest of the way: the very top or bottom of the page.
     if (next < 0) {
       if (list[i] !== cursor) setCursor(list[i]!);
@@ -322,58 +348,43 @@ function scrollAcross(el: Element, dir: 1 | -1): boolean {
 }
 
 /**
- * Presses the next control across for the block: a stepped diagram's Previous / Next, a Before / Both / After
- * switch, or a tab list. Only the block's own widget counts (the stepped diagram's card, the diagram the
- * switch sits in, the Tabs around the panel), never a control elsewhere on the page.
+ * Presses the next control across for the block, through the widget its component registered (src/kit/key-widget.ts):
+ * the next tab, step or option. When it switches what shows (a new tab's panel), the cursor follows into it.
  */
 function pressAcross(el: Element, dir: 1 | -1): boolean {
-  const owns = (owner: Element | null) => !!owner && (owner.contains(el) || el.contains(owner));
-  const steps = el.closest("[data-keys-steps]") ?? el.querySelector("[data-keys-steps]");
-  if (steps) {
-    const button = steps.querySelector<HTMLElement>(`[data-keys-step="${dir > 0 ? "next" : "prev"}"]`);
-    if (button) {
-      // At the last step, the key goes on to whatever is beside the diagram.
-      if (button.getAttribute("aria-disabled") === "true") return false;
-      button.click();
-      return true;
-    }
-  }
-  const root = keysRoot();
-  const group =
-    [...root.querySelectorAll("[data-keys-switch]")].find((g) => owns(g.closest("figure"))) ??
-    // The innermost Tabs around the block: an inner set comes after its outer one in the page.
-    [...root.querySelectorAll("[role=tablist]")].filter((t) => owns(t.parentElement)).at(-1);
-  if (!group) return false;
-  const items = [...group.querySelectorAll<HTMLElement>("[aria-pressed], [role=tab]")].filter((b) => !b.matches("[disabled], [aria-disabled=true]"));
-  const at = items.findIndex((b) => b.getAttribute("aria-pressed") === "true" || b.getAttribute("aria-selected") === "true");
-  const next = items[at + dir];
-  // Past the last tab or option, the key goes on to whatever is beside it.
-  if (!next) return false;
-  next.click();
-  // A new tab shows another panel: the cursor moves into it rather than being left on text that went away.
-  // React shows it a frame or two later, so look for a few frames.
-  if (group.matches("[role=tablist]")) {
-    const tabs = group.parentElement!;
-    let tries = 0;
-    const mine = ++tabWait;
-    const land = () => {
-      // A newer key press has taken over.
-      if (mine !== tabWait) return;
-      const panel = [...tabs.querySelectorAll("[role=tabpanel]")].find((p) => !p.hasAttribute("hidden") && (!next.id || p.getAttribute("aria-labelledby") === next.id));
-      const block = panel && blocks().find((b) => panel.contains(b));
-      if (block) setCursor(block);
-      else if (++tries < 20) requestAnimationFrame(land);
-    };
-    requestAnimationFrame(land);
-  }
+  const owner = runKeyWidget(el, keysRoot(), (w) => w.across?.(dir));
+  if (!owner) return false;
+  followInto(owner);
   return true;
+}
+
+/**
+ * After a widget changed what shows: if the cursor's block went away (a tab's panel replaced), put the cursor
+ * on the first stop now showing inside the widget. React shows it a frame or two later, so look for a few frames.
+ */
+function followInto(owner: Element) {
+  let tries = 0;
+  const mine = ++tabWait;
+  const land = () => {
+    if (mine !== tabWait) return;
+    // A few frames for React to show the change; a cursor still showing after that stays where it is.
+    if (cursor?.isConnected && !folded(cursor)) {
+      if (++tries < 4) requestAnimationFrame(land);
+      return;
+    }
+    cached = null;
+    const block = blocks().find((b) => owner.contains(b));
+    if (block) setCursor(block);
+    else if (++tries < 20) requestAnimationFrame(land);
+  };
+  requestAnimationFrame(land);
 }
 
 /** Moves the cursor to the block beside it in the same row. */
 function moveAcross(dir: 1 | -1): boolean {
   const list = blocks();
   const { i } = at(list);
-  const j = besideIndex(boxes(list), i, dir);
+  const j = rowAcross(rowsOf(boxes(list)), i, dir);
   if (j < 0) return false;
   setCursor(list[j]!);
   return true;
@@ -455,6 +466,14 @@ function open() {
   if (!cursor?.isConnected) return;
   const here = threadNodes().find((t) => cursor!.contains(t.node) || t.node.contains(cursor!));
   if (here) return send({ t: "comment:open", thread: here.id });
+  // A component's own action (open a row, focus an answer), when it registered one. If it put the focus in a
+  // field, Escape hands the keys back from there as from any control Enter focused.
+  const before = document.activeElement;
+  const owner = runKeyWidget(cursor, keysRoot(), (w) => w.enter?.());
+  if (owner) {
+    if (document.activeElement !== before && document.activeElement instanceof HTMLElement) opened = document.activeElement;
+    return followInto(owner);
+  }
   const control = cursor.matches(CONTROLS) ? cursor : (cursor.querySelector(CONTROLS) ?? cursor.closest("a[href]"));
   if (!(control instanceof HTMLElement)) return note("Nothing to open here");
   // A folded section's summary opens or closes it; the cursor stays on it, and j goes into what it showed.

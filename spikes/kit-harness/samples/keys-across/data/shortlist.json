@@ -1,0 +1,94 @@
+{
+ "question": "Which clinic for laser hair removal?",
+ "pick": "lumen",
+ "why": "Doctor-led, a fixed price per session, and a free test patch this month.",
+ "checked": "2026-10-27",
+ "next": "2026-11-30",
+ "criteria": [
+  "Safety",
+  "Total price",
+  "Distance"
+ ],
+ "options": [
+  {
+   "id": "lumen",
+   "name": "Lumen Skin Clinic",
+   "verdict": "pick",
+   "summary": "Doctor-led clinic using a diode laser suited to darker skin.",
+   "price": "\u20ac90 a session",
+   "pros": [
+    "A dermatologist does the consultation",
+    "Free test patch until 30 Nov"
+   ],
+   "cons": [
+    "Evening slots book out two weeks ahead"
+   ],
+   "deciding": "Can you make a weekday morning slot?",
+   "facts": [
+    {
+     "label": "Distance",
+     "value": "1.4 km"
+    },
+    {
+     "label": "Sessions",
+     "value": "6 to 8"
+    }
+   ],
+   "evidence": [
+    {
+     "label": "Price list",
+     "url": "https://lumen.example/prices",
+     "kind": "official"
+    },
+    {
+     "label": "Google reviews (4.8, 312)",
+     "url": "https://maps.example/lumen",
+     "kind": "report"
+    }
+   ],
+   "url": "https://lumen.example"
+  },
+  {
+   "id": "city-laser",
+   "name": "City Laser",
+   "verdict": "close",
+   "summary": "Cheaper chain studio; trained technicians, no doctor on site.",
+   "price": "\u20ac65 a session",
+   "priceChecked": "2026-10-25",
+   "cons": [
+    "Package prices only; single sessions not listed"
+   ],
+   "evidence": [
+    {
+     "label": "Packages",
+     "url": "https://citylaser.example/packages",
+     "kind": "official"
+    }
+   ]
+  },
+  {
+   "id": "home-ipl",
+   "name": "Home IPL device",
+   "verdict": "conditional",
+   "summary": "One-off cost; only works on light skin with dark hair.",
+   "price": "\u20ac299 once",
+   "deciding": "Is your hair darker than your skin?",
+   "evidence": [
+    {
+     "label": "Skin-tone chart",
+     "url": "https://maker.example/ipl/suitability",
+     "kind": "official"
+    }
+   ]
+  },
+  {
+   "id": "beauty-bar",
+   "name": "Beauty Bar",
+   "verdict": "no",
+   "summary": "Uses an older IPL machine not suited to darker skin."
+  }
+ ],
+ "decide": {
+  "options": "all"
+ }
+}

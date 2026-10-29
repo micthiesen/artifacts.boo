@@ -6,6 +6,7 @@ import * as React from "react";
 import { arrangeShortlist, checkShortlist, decisionChoices, type ShortlistData, type ShortlistOption, type Verdict } from "../../shared/shortlist.ts";
 import { SOURCE_KINDS } from "../../shared/sources.ts";
 import { useData } from "../hooks.ts";
+import { useKeyWidget } from "../key-widget.ts";
 import { Decision } from "./decision.tsx";
 import { AsOf } from "./evidence.tsx";
 import { ChevronDown } from "./icons.ts";
@@ -28,6 +29,14 @@ export default function ShortlistImpl({ data: path }: { data: string }) {
   const [open, setOpen] = React.useState<string | null>(null);
   const [showRuledOut, setShowRuledOut] = React.useState(false);
   const ruledOutId = React.useId();
+  // Enter on "Ruled out" opens or closes the list, as a click does.
+  const ruledOutButton = React.useRef<HTMLButtonElement>(null);
+  useKeyWidget(ruledOutButton, {
+    enter: () => {
+      setShowRuledOut((x) => !x);
+      return true;
+    },
+  });
   const problems = checkShortlist(s);
   if (problems.length) {
     // The Worker refuses these on write; this only shows when the page was saved before the check existed.
@@ -47,10 +56,12 @@ export default function ShortlistImpl({ data: path }: { data: string }) {
   );
 
   return (
-    <div className="art-shortlist my-6">
-      <h2 className="font-display text-[1.35rem] leading-snug font-semibold text-balance">{s.question}</h2>
+    <div className="art-shortlist my-6" data-key-scope="">
+      <h2 className="font-display text-[1.35rem] leading-snug font-semibold text-balance" data-key-stop="">
+        {s.question}
+      </h2>
       {pick ? (
-        <div className="mt-3 rounded-xl border border-primary/20 bg-primary/[0.09] px-4 py-3">
+        <div className="mt-3 rounded-xl border border-primary/20 bg-primary/[0.09] px-4 py-3" data-key-stop="">
           <p className="text-[1.0625rem] leading-snug text-pretty">
             Pick: <strong className="font-semibold">{pick.name}</strong>
           </p>
@@ -60,12 +71,12 @@ export default function ShortlistImpl({ data: path }: { data: string }) {
           </div>
         </div>
       ) : (
-        <div className="mt-2">
+        <div className="mt-2" data-key-stop="">
           <AsOf checked={s.checked} next={s.next} scope="prices" />
         </div>
       )}
       {s.criteria && s.criteria.length > 0 && (
-        <p className="mt-3 text-[14px] leading-snug text-muted-foreground">
+        <p className="mt-3 text-[14px] leading-snug text-muted-foreground" data-key-stop="">
           What matters, in order: <span className="text-foreground/90">{s.criteria.join(" · ")}</span>
         </p>
       )}
@@ -78,7 +89,9 @@ export default function ShortlistImpl({ data: path }: { data: string }) {
           <>
             {/* Like an accordion: opening shows them, closing takes them away at once. */}
             <button
+              ref={ruledOutButton}
               type="button"
+              data-key-stop=""
               aria-expanded={showRuledOut}
               aria-controls={ruledOutId}
               onClick={() => setShowRuledOut((x) => !x)}
@@ -113,11 +126,20 @@ function OptionRow({ option: o, rank, checked, open, onToggle }: { option: Short
   const id = React.useId();
   const v = VERDICT[o.verdict];
   const hasDetails = !!(o.pros?.length || o.cons?.length || o.deciding || o.facts?.length || o.evidence?.length || o.url || o.priceChecked);
+  // Enter on the row's line opens or closes it, as a click does.
+  const line = React.useRef<HTMLDivElement>(null);
+  useKeyWidget(line, {
+    enter: () => {
+      if (!hasDetails) return false;
+      onToggle();
+      return true;
+    },
+  });
   return (
     // Listen reads the row's line (rank, name, verdict, price, summary) as one unit; an open row's parts follow.
     // The button lies under the text rather than holding it, because Listen never reads inside a button.
     <li data-speak="option" id={`option-${o.id}`} className="scroll-mt-20">
-      <div className="relative">
+      <div ref={line} className="relative" data-key-stop="">
         {hasDetails && (
           <button
             type="button"
@@ -179,7 +201,7 @@ function OptionRow({ option: o, rank, checked, open, onToggle }: { option: Short
             </div>
           )}
           {o.deciding && (
-            <div>
+            <div data-key-stop="">
               <Label>Decides it</Label>
               <p className="flex gap-2">
                 <span aria-hidden="true" className="w-3 shrink-0 font-semibold text-caution">
@@ -190,7 +212,7 @@ function OptionRow({ option: o, rank, checked, open, onToggle }: { option: Short
             </div>
           )}
           {o.facts && o.facts.length > 0 && (
-            <dl className="grid grid-cols-[minmax(0,auto)_minmax(0,1fr)] gap-x-4 gap-y-1 text-[14px] leading-6">
+            <dl className="grid grid-cols-[minmax(0,auto)_minmax(0,1fr)] gap-x-4 gap-y-1 text-[14px] leading-6" data-key-stop="">
               {o.facts.map((f, i) => (
                 <React.Fragment key={i}>
                   <dt className="break-words text-muted-foreground">{f.label}</dt>
@@ -200,12 +222,12 @@ function OptionRow({ option: o, rank, checked, open, onToggle }: { option: Short
             </dl>
           )}
           {o.priceChecked && o.priceChecked !== checked && (
-            <div>
+            <div data-key-stop="">
               <AsOf checked={o.priceChecked} scope="price" />
             </div>
           )}
           {Boolean(o.url || o.evidence?.length) && (
-            <div>
+            <div data-key-stop="">
               <Label>Evidence</Label>
               <ul className="flex flex-col gap-1">
                 {o.url && (
@@ -242,7 +264,7 @@ function Label({ children }: { children: React.ReactNode }) {
 
 function Points({ label, sign, tone, items }: { label: string; sign: string; tone: string; items: string[] }) {
   return (
-    <div>
+    <div data-key-stop="">
       <Label>{label}</Label>
       <ul className="flex flex-col gap-1">
         {items.map((p, i) => (

@@ -12,6 +12,7 @@ import { Tabs as BaseTabs } from "@base-ui/react/tabs";
 import { Tooltip as BaseTooltip } from "@base-ui/react/tooltip";
 import { Check, ChevronDown, Minus, X } from "./icons.ts";
 import * as React from "react";
+import { useKeyWidget } from "../key-widget.ts";
 import { buttonClass } from "./primitives.tsx";
 import { cn } from "./utils.ts";
 
@@ -228,8 +229,34 @@ export function Slider({
 
 // ---- Tabs -------------------------------------------------------------------------
 
-export function Tabs({ className, ...props }: React.ComponentProps<typeof BaseTabs.Root>) {
-  return <BaseTabs.Root className={cn("flex flex-col gap-4", className as string)} {...props} />;
+export function Tabs({ className, ref, ...props }: React.ComponentProps<typeof BaseTabs.Root>) {
+  const root = React.useRef<HTMLDivElement | null>(null);
+  // h and l select the tab beside the current one; the keys then move the cursor into its panel.
+  useKeyWidget(root, { across: (dir) => stepTab(root.current, dir) });
+  const setRef = React.useCallback(
+    (el: HTMLDivElement | null) => {
+      root.current = el;
+      if (typeof ref === "function") ref(el);
+      else if (ref) ref.current = el;
+    },
+    [ref],
+  );
+  return <BaseTabs.Root ref={setRef} data-key-tabs="" className={cn("flex flex-col gap-4", className as string)} {...props} />;
+}
+
+/** Clicks the enabled tab `dir` from the selected one in `root`'s own tab list (not a nested Tabs'). */
+function stepTab(root: HTMLElement | null, dir: 1 | -1): boolean {
+  const list = root && [...root.querySelectorAll('[role="tablist"]')].find((l) => l.closest("[data-key-tabs]") === root);
+  if (!list) return false;
+  const tabs = [...list.querySelectorAll<HTMLElement>('[role="tab"]')].filter((t) => t.closest('[role="tablist"]') === list);
+  const at = tabs.findIndex((t) => t.getAttribute("aria-selected") === "true" || t.hasAttribute("data-active"));
+  for (let i = at + dir; i >= 0 && i < tabs.length; i += dir) {
+    const tab = tabs[i]!;
+    if (tab.getAttribute("aria-disabled") === "true" || tab.hasAttribute("data-disabled") || (tab as HTMLButtonElement).disabled) continue;
+    tab.click();
+    return true;
+  }
+  return false;
 }
 export function TabsList({ className, children, ...props }: React.ComponentProps<typeof BaseTabs.List>) {
   return (

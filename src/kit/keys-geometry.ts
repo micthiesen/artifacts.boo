@@ -1,6 +1,7 @@
-// Where the keys go on a page laid out in rows and columns (src/kit/keys-page.ts): blocks side by side (Stat
-// cells, cards in a Grid, columns) are one row, so j and k move down and up a row and h and l move along it.
-// Pure geometry over rectangles, so it can be tested without a browser.
+// Where the keys go on a page laid out in rows and columns (src/kit/keys-page.ts). Blocks side by side (Stat
+// cells, cards in a Grid, columns) make one row: j and k move from row to row, h and l along a row. Every block
+// is in exactly one row, so j and k visit the same rows down as up, and nothing is out of reach. Pure geometry
+// over rectangles, so it can be tested without a browser.
 
 export type Box = { top: number; bottom: number; left: number; right: number };
 
@@ -11,39 +12,58 @@ function sharedHeight(a: Box, b: Box): number {
   return shorter > 0 ? Math.max(0, overlap) / shorter : 0;
 }
 
-/** Side by side: most of their height shared, and not overlapping across. */
-export function beside(a: Box, b: Box): boolean {
-  return sharedHeight(a, b) >= 0.5 && (b.left >= a.right - 4 || b.right <= a.left + 4);
+/** How much two boxes share across, in pixels. */
+function sharedWidth(a: Box, b: Box): number {
+  return Math.max(0, Math.min(a.right, b.right) - Math.max(a.left, b.left));
 }
 
 /**
- * The next block down (dir 1) or up (dir -1) from `at`, in reading order: skipping blocks beside it and blocks
- * wholly above it (going down) or wholly below it (going up), which are other columns of a row already passed.
- * A block in a staggered column that overlaps it at all is still a stop, so nothing is unreachable.
- * When nothing qualifies (an odd layout), simply the next block, so the keys never get stuck.
+ * The page's rows, top to bottom, each a list of block indexes left to right. A block joins the row whose first
+ * (topmost) block it shares most of its height with; otherwise it starts the next row.
  */
-export function nextInColumn(boxes: Box[], at: number, dir: 1 | -1): number {
-  const here = boxes[at]!;
-  for (let j = at + dir; j >= 0 && j < boxes.length; j += dir) {
-    const b = boxes[j]!;
-    if (beside(here, b)) continue;
-    if (dir > 0 ? b.bottom <= here.top + 2 : b.top >= here.bottom - 2) continue;
-    return j;
+export function rowsOf(boxes: Box[]): number[][] {
+  const order = boxes.map((_, i) => i).sort((a, b) => boxes[a]!.top - boxes[b]!.top || boxes[a]!.left - boxes[b]!.left);
+  const rows: number[][] = [];
+  for (const i of order) {
+    const row = rows.at(-1);
+    if (row && sharedHeight(boxes[row[0]!]!, boxes[i]!) >= 0.5) row.push(i);
+    else rows.push([i]);
   }
-  const plain = at + dir;
-  return plain >= 0 && plain < boxes.length ? plain : -1;
+  for (const row of rows) row.sort((a, b) => boxes[a]!.left - boxes[b]!.left);
+  return rows;
 }
 
-/** The nearest block beside `at` to its right (dir 1) or left (dir -1), or -1 when the row ends there. */
-export function besideIndex(boxes: Box[], at: number, dir: 1 | -1): number {
+/** The row a block is in. */
+function rowOf(rows: number[][], at: number): number {
+  return rows.findIndex((r) => r.includes(at));
+}
+
+/**
+ * j (1) or k (-1): the block in the next row down or up that lines up best with this one: the one this block
+ * covers the most of its width (so from a wide heading or paragraph, the row's first block, as you'd read it,
+ * whichever cell is widest), else the nearest across when none line up. -1 past the first or last row.
+ */
+export function rowStep(rows: number[][], boxes: Box[], at: number, dir: 1 | -1): number {
+  const r = rowOf(rows, at) + dir;
+  const target = rows[r];
+  if (!target) return -1;
   const here = boxes[at]!;
-  let best = -1;
-  let gap = Infinity;
-  boxes.forEach((b, j) => {
-    if (j === at || !beside(here, b)) return;
-    const d = dir > 0 ? b.left - here.right : here.left - b.right;
-    if (d < -4) return;
-    if (d < gap) [best, gap] = [j, d];
-  });
-  return best;
+  const centre = (b: Box) => (b.left + b.right) / 2;
+  // Share of the candidate's width this block spans, rounded so near-equal counts as equal.
+  const covered = (b: Box) => Math.round((sharedWidth(here, b) / Math.max(1, b.right - b.left)) * 20) / 20;
+  return target.reduce((best, i) => {
+    const ca = covered(boxes[i]!);
+    const cb = covered(boxes[best]!);
+    if (ca !== cb) return ca > cb ? i : best;
+    // Equally covered: the first in the row; none covered: the nearest across.
+    if (ca > 0) return best;
+    return Math.abs(centre(boxes[i]!) - centre(here)) < Math.abs(centre(boxes[best]!) - centre(here)) ? i : best;
+  }, target[0]!);
+}
+
+/** h (-1) or l (1): the block before or after this one in its row, or -1 at the row's end. */
+export function rowAcross(rows: number[][], at: number, dir: 1 | -1): number {
+  const row = rows[rowOf(rows, at)];
+  if (!row) return -1;
+  return row[row.indexOf(at) + dir] ?? -1;
 }
