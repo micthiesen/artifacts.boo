@@ -16,6 +16,7 @@ import {
 } from "../../shared/findings.ts";
 import { useData } from "../hooks.ts";
 import * as store from "../store.ts";
+import { Decision } from "./decision.tsx";
 import { Diagram } from "./diagram.tsx";
 import { ChevronDown } from "./icons.ts";
 import { Callout, Link, Section, Summary } from "./layout.tsx";
@@ -108,6 +109,19 @@ export default function FindingsImpl({ data: path }: { data: string }) {
         </ol>
       </Section>
 
+      {g.minor && g.minor.length > 0 && (
+        <Section title={<KeyHeading>Smaller wins</KeyHeading>}>
+          <ul className="divide-y divide-border rounded-xl border border-border">
+            {g.minor.map((m, i) => (
+              <li key={i} className="px-4 py-2.5 text-[15px]" data-key-stop="">
+                <span className="font-medium">{m.title}</span>
+                <span className="block text-muted-foreground">{m.change}</span>
+              </li>
+            ))}
+          </ul>
+        </Section>
+      )}
+
       {g.notWorth && g.notWorth.length > 0 && (
         <details className="mt-8 rounded-xl border border-border">
           <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 rounded-xl px-4 py-2.5 font-semibold outline-none focus-visible:focus-halo [&::-webkit-details-marker]:hidden" data-key-stop="">
@@ -172,8 +186,12 @@ function FindingRow({ f, rank }: { f: Finding; rank: number }) {
           </dl>
           {f.metrics && f.metrics.length > 0 && (
             <div data-key-stop="">
-              <DeltaImpl rows={f.metrics} />
+              {/* Delta has no slot beside the after value, so an expected number says so in the row's note. */}
+              <DeltaImpl rows={f.metrics.map(({ expected, ...r }) => (expected ? { ...r, note: r.note ? `Expected after value. ${r.note}` : "Expected after value" } : r))} />
             </div>
+          )}
+          {f.decide && (
+            <Decision id={`finding-${f.id}`} question={f.decide.question ?? f.title} options={f.decide.options} recommended={f.decide.recommended} />
           )}
           {(f.owner || f.link) && (
             <p className="mt-3 flex flex-wrap gap-x-3 gap-y-1 text-[14px] text-muted-foreground" data-key-stop="">

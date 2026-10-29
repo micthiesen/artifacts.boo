@@ -18,10 +18,14 @@ fewer); the pull request's description is enough.
    - `git diff --numstat <base>...HEAD`: one `files` entry per line,
      `{"path", "add", "del"}` (leave out `add` and `del` for a binary file,
      shown as `-`).
+   - Over about 40 changed files (a sweep, a rename), list folders instead:
+     `{"path": "supabase/functions/", "files": 429, "add", "del"}`, summed
+     from the numstat lines under it. Every changed file must sit under an
+     entry; patterns like `src/**` are refused.
    - `git rev-parse --short HEAD`: `head`.
    - `git diff <base>...HEAD -- <file>`: lines for a step's `diff`.
 2. Write two files, then `artifact_create` (private, as always):
-   - `index.mdx`: `# <what changes, in plain words>` and `<ChangeGuide data="guide.json" />`. Nothing else.
+   - `index.mdx`: `# <the change's name, 3 to 6 words>` and `<ChangeGuide data="guide.json" />`. Nothing else. The `outcome` sentence comes right under the title, so the title names the change ("Failed sends lose the check") and the outcome says what a person notices; don't say it twice.
    - `data/guide.json`, shaped as below.
 3. Look at it once with `artifact_check` and `phone: true`.
 4. Put the link first in the pull request's description.
@@ -29,7 +33,7 @@ fewer); the pull request's description is enough.
 The write is refused, with a reason per problem, when a changed file is in no
 step and not in `alsoTouched`, a step names a file that isn't in `files`, a
 `focus` id isn't a node in `map`, a question points at a missing step, a
-check that ran has no exit code or commit, the map isn't a top-down flowchart
+check that ran has no commit or no exit code (or `result`), the map isn't a top-down flowchart
 or a sequence diagram, or is too wide for a phone, there are more than 6 steps,
 or an optional field is malformed (the reason says how to fix it).
 
@@ -100,10 +104,12 @@ or an optional field is malformed (the reason says how to fix it).
   "caption"}]`, each an image you uploaded with `artifact_asset`
   (`"assets/menu-before.png"`). With both, phones get a Before / After switch
   and wide screens show them side by side. Use them when the change is
-  something you see; capture both at the same size.
+  something you see; capture both at the same size. Screenshots you took for
+  the pull request belong here too: upload the same files. A link saying
+  "screenshots on the PR" makes a phone reader leave the page.
 - `links` (optional): up to 4 more links beside `url`, `[{"label", "url"}]`:
   the ticket, the CI run, related guides.
-- `map`: one top-down Mermaid flowchart (`flowchart TD`) of the part of the
+- `map` (optional): one top-down Mermaid flowchart (`flowchart TD`) of the part of the
   system the change touches: under about 10 nodes, 2 to 4 word labels, and at
   most 2 nodes side by side, so it reads on a phone (a map wider than 520 px is
   refused). Mark nodes `:::added`,
@@ -112,13 +118,19 @@ or an optional field is malformed (the reason says how to fix it).
   between Before, Both and After, so the removed and added paths should each
   make sense alone. When the change is really a request flow between a few
   parts, a `sequenceDiagram` (at most 4 participants) can be the map instead;
-  it has no marks, and a step's `focus` names participants.
+  it has no marks, and a step's `focus` names participants. Leave `map` out
+  when nothing flows: a comment sweep, a rename or a formatting pass has no
+  picture worth drawing, and a diagram of how you sorted the files isn't one.
 - `lookHere`: 0 to 3 yes/no questions only a person can answer (product
   judgement, an unverified risk), each pointing at its step. Zero is fine; never
-  pad. Don't repeat what "Checked" already says.
+  pad. Don't repeat what "Checked" already says. A question the merge waits
+  on ("is overriding the browser's find what you want?") is a choice: put it
+  in `decide` with `ask.kind: "decide"`, so the answer is given and kept on
+  the page.
 - `stops`: 1 to 6 steps, in the order a reader understands them: start where a
   person notices the change and follow it to the cause. Put tests in the step
-  of the code they cover.
+  of the code they cover, and docs in the step whose behaviour they describe:
+  a step that only updates docs is padding.
   - `title`: 8 words or fewer.
   - `why`: one or two sentences saying why, never "updated X" or "refactored
     Y". Plain words; code names belong in file chips, not sentences.
@@ -128,16 +140,21 @@ or an optional field is malformed (the reason says how to fix it).
   - `focus` (optional): the `map` node ids this step is about; it should
     light fewer than half of them, or the step adds nothing. The map is drawn
     once: steps with a `focus` become its walk-through, and each gets an "On
-    the map" button that lights its part.
+    the map" button that lights its part. It takes two or more steps with a
+    `focus` to make a walk-through; with one, the map just shows whole.
   - Big steps are fine: files are grouped by folder, folded past 8, and a
     file mirrored under two roots (`src/x/y.ts` and `web/src/x/y.ts`) shows
     once with "×2".
 - `alsoTouched`: lockfiles, generated files, renames and formatting. Every file
-  in `files` is in a step or here, once.
-- `proof`: only commands you ran, with their real exit code and the commit
-  they ran at. A check run at another commit than `head` says so. Optional:
-  `env` (`local`, `ci`, `staging`, `prod`), `count` (what it reported, "212
-  passed"), `link` (the CI run). A test you ran before the fix to show it
+  in `files` is in a step or here, once. Tests, specs and docs are never here:
+  they go in the step they prove or describe.
+- `proof`: only checks you ran, with the commit they ran at. A command has its
+  real `exit` code. A check a person watched rather than ran as a command (a
+  browser walk-through, a staging run) has `"result": "passed"` or `"failed"`
+  and no exit code: never make one up. Optional: `env` (`local`, `ci`,
+  `staging`, `prod`), `count` (what it printed, a few words: "212 passed"),
+  `note` (anything else, briefly: what failed, what it skipped), `link` (the
+  CI run). A test you ran before the fix to show it
   failed is `"expect": "fail"`: it shows as "Failed first", evidence, not a
   failure. Something you'd want checked before merging that nobody ran is
   `"ran": false`.
@@ -150,8 +167,10 @@ or an optional field is malformed (the reason says how to fix it).
 ## Keep it current
 
 - New commits: rerun the git commands, then `artifact_patch_data` the `files`,
-  `head` and `proof`, and edit only the steps whose files changed. Keep red-first
-  rows: they stay true at their old commit. Pass a
+  `head` and `proof`, and edit only the steps whose files changed. Add each
+  check you rerun as a new row at the new `head`: a run of the same check at an
+  older commit then folds under "Earlier runs" by itself. Keep red-first rows:
+  they stay true at their old commit. Pass a
   `note` ("Covers the retry fix"): readers see it in the page's history and in
   update notifications.
 - Comments on the page are questions about the change. Answer them with

@@ -42,7 +42,7 @@ test("a broken map is reported as the map's syntax error", async () => {
 
 test("a check that ran needs its exit code and commit; more than six steps is too many", () => {
   const proof = [{ check: "bun test", ran: true }];
-  expect(checkChangeGuide({ ...example, proof }).join("\n")).toContain("needs its \"exit\" code");
+  expect(checkChangeGuide({ ...example, proof }).join("\n")).toContain("its \"exit\" code, or for a check a person watched");
   const stops = Array.from({ length: 7 }, () => example.stops[0]);
   expect(checkChangeGuide({ ...example, stops }).join("\n")).toContain("1 to 6 steps");
 });
@@ -82,4 +82,13 @@ test("a sequence diagram can be the map, its steps focusing participants", async
   const map = "sequenceDiagram\n  participant B as Browser\n  participant W as Worker\n  B->>W: GET /a/x\n  W-->>B: page and data";
   const stops = [example.stops[0], { ...example.stops[1], focus: "W" }];
   expect(await messages({ ...example, map, stops })).toEqual([]);
+});
+
+test("on save, patterns in files are refused, folders need their count, and bracketed route paths are fine", async () => {
+  const withFile = (f: object) => ({ ...example, files: [...example.files, f], alsoTouched: [...example.alsoTouched, (f as { path: string }).path] });
+  expect((await messages(withFile({ path: "packages/core/**", add: 1, del: 1 }))).join("\n")).toContain('the pattern "packages/core/**"');
+  expect((await messages(withFile({ path: "packages/core/", add: 1, del: 1 }))).join("\n")).toContain('folder "packages/core/" needs "files"');
+  expect((await messages(withFile({ path: "a.ts", files: 2, add: 1, del: 1 }))).join("\n")).toContain("only a folder");
+  expect(await messages(withFile({ path: "packages/core/", files: 88, add: 1, del: 1 }))).toEqual([]);
+  expect(await messages(withFile({ path: "app/[id]/page.tsx", add: 1, del: 1 }))).toEqual([]);
 });

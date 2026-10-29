@@ -17,7 +17,7 @@ async function markup(node: React.ReactNode): Promise<string> {
   await React.act(async () => root.unmount());
   return out;
 }
-const { BulletBarImpl, DeltaImpl, computeDelta, formatPercent, formatQuantity, niceCeil, scaleUnit, targetVerdict } = await import("./numbers-impl.tsx");
+const { BulletBarImpl, DeltaImpl, computeDelta, toleranceAmount, rowProblem, formatPercent, formatQuantity, niceCeil, scaleUnit, targetVerdict } = await import("./numbers-impl.tsx");
 const { Stat } = await import("./layout.tsx");
 
 afterAll(async () => {
@@ -73,6 +73,29 @@ describe("delta", () => {
 
   test("no change is flat, even through floating point", () => {
     expect(computeDelta({ before: 0.1 + 0.2, after: 0.3, better: "up" })).toMatchObject({ direction: "flat", verdict: "same", change: "No change" });
+  });
+
+  test("a change within the tolerance reads about the same, neutral, in either direction", () => {
+    expect(toleranceAmount("5%", 200)).toBe(10);
+    expect(toleranceAmount(3, 200)).toBe(3);
+    expect(toleranceAmount("bogus", 200)).toBe(0);
+    const row = { before: 200, after: 208, unit: "ms", better: "down" as const };
+    expect(computeDelta(row)).toMatchObject({ verdict: "worse", tolerated: false });
+    expect(computeDelta({ ...row, tolerance: "5%", after: 212 })).toMatchObject({ verdict: "worse" });
+    expect(computeDelta({ ...row, tolerance: "5%", after: 195 })).toMatchObject({ verdict: "same", tolerated: true, direction: "down" });
+    expect(computeDelta({ ...row, tolerance: 8 })).toMatchObject({ verdict: "same", tolerated: true });
+    expect(computeDelta({ ...row, tolerance: 7 })).toMatchObject({ verdict: "worse" });
+    expect(computeDelta(row, 10)).toMatchObject({ verdict: "same" });
+    expect(computeDelta({ ...row, tolerance: 1 }, 10)).toMatchObject({ verdict: "worse" });
+    expect(rowProblem({ label: "x", before: 1, after: 2, better: "up", tolerance: "lots" })).toContain("tolerance");
+    expect(rowProblem({ label: "x", before: 1, after: 2, better: "up", tolerance: "5%" })).toBeNull();
+  });
+
+  test("a tolerated row says so in words, with a neutral tone", async () => {
+    const html = await markup(<DeltaImpl rows={[{ label: "Latency", before: 200, after: 204, unit: "ms", better: "down" }]} tolerance="5%" />);
+    expect(html).toContain("about the same");
+    expect(html).not.toContain("worse");
+    expect(html).toContain("text-muted-foreground");
   });
 
   test("percentages change in points; from zero there is no percent", () => {

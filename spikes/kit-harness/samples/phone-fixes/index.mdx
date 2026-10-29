@@ -1,0 +1,14 @@
+# Phone fixes
+
+| Step | What | Why |
+|---|---|---|
+| 1 | Remove narrating comments across supabase/functions | A comment that repeats the next line goes stale and costs a reader time every visit |
+| 2 | Lint rule | Keeps them from coming back without anyone having to remember the rule in review |
+
+<Table data="leads.json" />
+
+<Delta tolerance="10%" rows={[{label: "Chat open", before: 54, after: 41, unit: "ms", better: "down", tolerance: 30}, {label: "Load", before: 3800, after: 1100, unit: "ms", better: "down"}, {label: "Bundle", before: 200, after: 205, unit: "KB", better: "down"}]} />
+
+<ChangeGuide data="guide.json" />
+
+<Findings data="findings.json" />

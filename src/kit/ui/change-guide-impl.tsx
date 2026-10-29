@@ -5,10 +5,12 @@
 import * as React from "react";
 import {
   checkChangeGuide,
+  fileCount,
   groupFiles,
   mapSteps,
   proofStatus,
   slug,
+  superseded,
   takeLines,
   type ChangeGuideData,
   type FileItem,
@@ -65,7 +67,11 @@ export default function ChangeGuideImpl({ data: path }: { data: string }) {
     setStep({ at, all: false });
     mapRef.current?.scrollIntoView({ block: "start", behavior: scrollBehavior() });
   };
-  const ran = g.proof.filter((p) => p.ran);
+  const count = fileCount(g.files);
+  // A check also run at the head says what it is now; its runs at older commits fold away as "Earlier runs".
+  const old = superseded(g.proof, g.head);
+  const ran = g.proof.filter((p, i) => p.ran && !old.has(i));
+  const earlier = g.proof.filter((_, i) => old.has(i));
   const notRun = g.proof.filter((p) => !p.ran);
   const links = [...(g.url ? [{ label: "Open the change", url: g.url }] : []), ...(g.links ?? [])];
 
@@ -89,7 +95,7 @@ export default function ChangeGuideImpl({ data: path }: { data: string }) {
           </Cell>
           <Cell label="Size">
             <span className="tabular-nums">
-              {g.files.length} {g.files.length === 1 ? "file" : "files"} ·{" "}
+              {count} {count === 1 ? "file" : "files"} ·{" "}
               <span className="whitespace-nowrap">
                 <span className="text-positive">+{add}</span> <span className="text-negative">−{del}</span>
               </span>
@@ -165,13 +171,15 @@ export default function ChangeGuideImpl({ data: path }: { data: string }) {
         {g.shots?.map((s, i) => <Shot key={i} shot={s} />)}
       </div>
 
-      <Section title={<Heading>The picture</Heading>}>
-        {steps.length ? (
-          <SteppedMap ref={mapRef} code={g.map} steps={steps} state={step} onState={setStep} />
-        ) : (
-          <Diagram code={g.map} className="my-0" />
-        )}
-      </Section>
+      {g.map && (
+        <Section title={<Heading>The picture</Heading>}>
+          {steps.length ? (
+            <SteppedMap ref={mapRef} code={g.map} steps={steps} state={step} onState={setStep} />
+          ) : (
+            <Diagram code={g.map} className="my-0" />
+          )}
+        </Section>
+      )}
 
       <Section title={<Heading>Step by step</Heading>}>
         <Steps>
@@ -218,6 +226,16 @@ export default function ChangeGuideImpl({ data: path }: { data: string }) {
           </p>}
         {ran.length > 0 && <Proofs label={notRun.length ? "Ran" : undefined} proofs={ran} head={g.head} />}
         {notRun.length > 0 && <Proofs label={ran.length ? "Not run" : undefined} proofs={notRun} head={g.head} />}
+        {earlier.length > 0 && (
+          <details className="mt-4 rounded-lg border border-border px-4 py-2.5 text-[15px]">
+            <summary className="cursor-pointer rounded py-0.5 outline-none focus-visible:focus-halo" data-key-stop="">
+              Earlier runs ({earlier.length})
+            </summary>
+            <div className="mt-2">
+              <Proofs proofs={earlier} head={g.head} />
+            </div>
+          </details>
+        )}
         {g.alsoTouched && g.alsoTouched.length > 0 && (
           <details className="mt-4 rounded-lg border border-border px-4 py-2.5 text-[15px]">
             <summary className="cursor-pointer rounded py-0.5 outline-none focus-visible:focus-halo" data-key-stop="">Also touched ({g.alsoTouched.length})</summary>
@@ -392,19 +410,22 @@ function Proofs({ label, proofs, head }: { label?: string; proofs: GuideProof[];
           const bits: React.ReactNode[] = [];
           if (s.verdict === "red") bits.push("before the fix, as it should");
           if (p.expect === "fail" && s.verdict === "failed") bits.push("should have failed before the fix and didn't");
-          if (p.ran) bits.push(`exit ${p.exit}`);
+          if (p.ran) bits.push(p.exit != null ? `exit ${p.exit}` : "watched");
           if (p.count) bits.push(p.count);
+          if (p.note) bits.push(p.note);
           if (p.env) bits.push(ENV[p.env]);
           if (p.ran) bits.push(s.older ? `at ${p.head}, an older commit` : `at ${p.head}`);
           if (p.link) bits.push(<Link href={p.link}>the run</Link>);
           return (
-            <li key={i} className="flex gap-3 px-4 py-2.5 text-[15px]" data-key-stop="">
-              <span className={cn("w-[6.5rem] shrink-0 text-[13px] font-medium", v.tone)}>
+            // On a phone the verdict sits above the check, so a long command keeps the full width.
+            <li key={i} className="flex flex-col gap-0.5 px-4 py-2.5 text-[15px] sm:flex-row sm:gap-3" data-key-stop="">
+              <span className={cn("shrink-0 text-[13px] font-medium sm:w-[6.5rem]", v.tone)}>
                 <span aria-hidden="true">{v.sign} </span>
                 {v.word}
               </span>
               <span className="min-w-0">
-                <span className={cn(p.ran && "font-mono text-[13.5px] break-words")}>{p.check}</span>
+                {/* A command reads as code; a check someone watched reads as words. */}
+                <span className={cn(p.exit != null && "font-mono text-[13.5px] break-words")}>{p.check}</span>
                 {bits.length > 0 && (
                   <span className="block text-[13px] text-muted-foreground">
                     {bits.map((b, j) => (
@@ -457,7 +478,7 @@ function Files({ files }: { files: GuideFile[] }) {
           const shared = !!roots && g.items.every((i) => i.roots?.join("\0") === roots);
           return (
             <li key={g.dir} className="min-w-0">
-              <div tabIndex={0} title={g.dir} className="group flex min-h-6 items-end rounded-md px-3 pt-1 text-[12px] outline-none focus-visible:focus-halo">
+              <div tabIndex={0} title={g.dir} className="group min-h-6 rounded-md px-3 pt-1 text-[12px] outline-none focus-visible:focus-halo">
                 <span className="flex min-w-0 group-focus:flex-wrap">
                   <Dir text={g.dir} />
                 </span>
@@ -521,12 +542,15 @@ function FileLine({ item, chip, nameOnly, hideRoots }: { item: FileItem; chip?: 
         chip ? "max-w-full rounded-md border border-border bg-muted/40 px-2 py-0.5" : cn("rounded-md py-1 pr-3", nameOnly ? "pl-6" : "pl-3"),
       )}
     >
-      <span className="flex min-w-0 items-baseline gap-x-2">
-        <span className={cn("flex min-w-0 font-mono group-focus:flex-wrap", !chip && "flex-1")}>
+      {/* The name keeps its width (min-width in ch, the font is monospace) and the directory gives way first;
+          when the name and its counts still don't fit, the counts wrap below instead of breaking the name. */}
+      <span className="flex min-w-0 flex-wrap items-baseline gap-x-2">
+        <span className={cn("flex min-w-0 font-mono group-focus:flex-wrap", !chip && "flex-1")} style={{ minWidth: `min(100%, ${item.name.length + 0.5}ch)` }}>
           {!nameOnly && <Dir text={item.dir} />}
-          <span className="min-w-0 [overflow-wrap:anywhere]">{item.name}</span>
+          <span className="max-w-full shrink-0 [overflow-wrap:anywhere]">{item.name}</span>
         </span>
         <span className={cn("shrink-0 whitespace-nowrap tabular-nums", !chip && "ml-auto")}>
+          {item.files != null && <span className="mr-1.5 text-muted-foreground">{item.files} {item.files === 1 ? "file" : "files"}</span>}
           {copies > 1 && (
             <span className="mr-1.5 text-muted-foreground">
               <span aria-hidden="true">×{copies}</span>

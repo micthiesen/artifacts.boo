@@ -5,6 +5,7 @@ import { Contents, TaskCheckbox } from "./page-extras.tsx";
 import * as React from "react";
 import { cn } from "./utils.ts";
 import { Diff } from "./diff.tsx";
+import { useOverflowCards, usePhone } from "./table.tsx";
 
 type P<T extends keyof React.JSX.IntrinsicElements> = React.ComponentProps<T>;
 
@@ -22,31 +23,34 @@ function PlainPre({ className, ...p }: P<"pre">) {
 }
 
 /**
- * A markdown table. On phones, one with more than three columns reads as cards, like a Table: each cell is
+ * A markdown table. On phones, one with more than three columns, or too wide for the page, reads as cards, like a Table: each cell is
  * labelled with its column (set here from the header row) and the CSS lays rows out as label: value.
  */
 function MarkdownTable({ className, ...p }: P<"table">) {
   const ref = React.useRef<HTMLTableElement>(null);
-  const [cards, setCards] = React.useState(false);
+  const box = React.useRef<HTMLDivElement>(null);
+  const [wide, setWide] = React.useState(false);
+  // Cards are a phone layout (the CSS applies them under 640 px), so only a phone measures.
+  const overflowing = useOverflowCards(box, usePhone() && !wide, p.children);
+  const cards = wide || overflowing;
   // Before paint, so phones don't see the table flash first. Roles keep it a table to screen readers as cards.
   React.useLayoutEffect(() => {
     const table = ref.current;
     if (!table) return;
     const heads = [...table.querySelectorAll(":scope > thead th")].map((th) => th.textContent?.trim() ?? "");
-    const wide = heads.length > 3;
+    const many = heads.length > 3;
     table.setAttribute("role", "table");
     for (const tr of table.querySelectorAll(":scope > tbody > tr")) {
       tr.setAttribute("role", "row");
       [...tr.children].forEach((td, i) => {
         td.setAttribute("role", "cell");
-        if (wide) td.setAttribute("data-label", heads[i] ?? "");
-        else td.removeAttribute("data-label");
+        td.setAttribute("data-label", heads[i] ?? "");
       });
     }
-    setCards(wide);
+    setWide(many);
   }, [p.children]);
   return (
-    <div className={cn("my-6 overflow-hidden rounded-xl border border-border bg-card shadow-card", cards && "md-cards")}>
+    <div ref={box} className={cn("my-6 overflow-hidden rounded-xl border border-border bg-card shadow-card", cards && "md-cards")}>
       <ScrollX>
         <table ref={ref} className={cn("w-full border-collapse text-[14px] leading-snug [&_td[style*=right]]:tabular-nums", className)} {...p} />
       </ScrollX>

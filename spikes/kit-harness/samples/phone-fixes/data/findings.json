@@ -1,0 +1,99 @@
+{
+ "question": "Why does CI take 24 minutes on a typical pull request, and what would cut it most?",
+ "answer": "Most of the time is the e2e suite running on one machine after the unit tests finish. Sharding it four ways and caching dependencies would bring a typical run to about 9 minutes; the other wins are small.",
+ "method": {
+  "window": "2026-10-01 to 2026-10-27",
+  "sample": "412 CI runs on main and pull requests",
+  "setup": "GitHub Actions, ubuntu-latest, 4 vCPU",
+  "head": "a8ef847",
+  "sources": [
+   {
+    "label": "Actions usage export",
+    "url": "https://github.com/acme/app/actions"
+   }
+  ],
+  "caveats": [
+   "Cancelled runs are left out.",
+   "Time waiting in the queue isn't counted."
+  ]
+ },
+ "findings": [
+  {
+   "id": "shard-e2e",
+   "title": "Shard the e2e suite four ways",
+   "impact": "high",
+   "effort": "medium",
+   "confidence": "measured",
+   "status": "open",
+   "change": "Split Playwright into 4 shards with --shard and merge the reports.",
+   "benefit": "The e2e job drops from 14 to about 4 minutes.",
+   "validate": "Median CI time on main over a week.",
+   "metrics": [
+    {
+     "label": "e2e job",
+     "before": 840,
+     "after": 250,
+     "unit": "s",
+     "better": "down",
+     "note": "trial branch, 20 runs",
+     "expected": true
+    }
+   ],
+   "owner": "Dana"
+  },
+  {
+   "id": "cache-deps",
+   "title": "Cache dependencies between runs",
+   "impact": "high",
+   "effort": "small",
+   "confidence": "measured",
+   "status": "shipped",
+   "change": "Use actions/cache keyed on bun.lock.",
+   "benefit": "Install drops from 95 s to 8 s.",
+   "metrics": [
+    {
+     "label": "Install",
+     "before": 95,
+     "after": 8,
+     "unit": "s",
+     "better": "down"
+    }
+   ],
+   "link": {
+    "label": "PR #811",
+    "url": "https://github.com/acme/app/pull/811"
+   }
+  },
+  {
+   "id": "bigger-runner",
+   "title": "Move tests to 8 vCPU runners",
+   "impact": "medium",
+   "effort": "small",
+   "confidence": "guess",
+   "status": "decide",
+   "change": "Switch the test job to the 8-core larger runner, or keep 4 cores. I'd try it for a week.",
+   "benefit": "Perhaps 30% faster unit tests, at twice the price per minute.",
+   "validate": "A week of runs, and the bill.",
+   "decide": {
+    "question": "Move tests to 8 vCPU runners?",
+    "options": [
+     "Try it for a week",
+     "Keep 4 cores"
+    ],
+    "recommended": "Try it for a week"
+   }
+  }
+ ],
+ "minor": [
+  {
+   "title": "Drop the unused lint cache step",
+   "change": "Delete the cache step in lint.yml; it never hits."
+  }
+ ],
+ "notWorth": [
+  {
+   "title": "Self-hosted runners",
+   "why": "They save money only above about 40,000 minutes a month; we use 9,000."
+  }
+ ]
+}

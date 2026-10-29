@@ -2,7 +2,7 @@
 // valid, and the file lists fold mirrored copies, group by directory and keep a file name when cut short.
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import { checkChangeGuide, foldMirrors, groupFiles, mapKind, mapSteps, proofStatus, slug, splitPath, takeLines } from "../src/shared/change-guide.ts";
+import { checkChangeGuide, fileCount, foldMirrors, groupFiles, mapKind, mapSteps, proofStatus, slug, splitPath, superseded, takeLines } from "../src/shared/change-guide.ts";
 
 const recipe = readFileSync("docs/guides/change.md", "utf8");
 const example = JSON.parse(/```json\n([\s\S]*?)\n```/.exec(recipe)![1]);
@@ -135,9 +135,60 @@ test("the map: flowchart or sequence, steps only for stops that focus, numbered 
   const { steps, stepOf } = mapSteps([
     { title: "One", why: "w1", files: [] },
     { title: "Two", why: "w2", files: [], focus: "A B" },
+    { title: "Three", why: "w3", files: [], focus: "C" },
   ]);
-  expect(steps).toEqual([{ focus: "A B", title: "2. Two", text: "w2" }]);
-  expect([...stepOf]).toEqual([[1, 0]]);
+  expect(steps).toEqual([
+    { focus: "A B", title: "2. Two", text: "w2" },
+    { focus: "C", title: "3. Three", text: "w3" },
+  ]);
+  expect([...stepOf]).toEqual([
+    [1, 0],
+    [2, 1],
+  ]);
+  // One focus is no walk-through: the map shows whole, with no "All 1 steps".
+  expect(mapSteps([{ title: "Two", why: "w2", files: [], focus: "A B" }]).steps).toEqual([]);
+});
+
+test("a check someone watched has a result instead of an exit code, and reads as passed or failed", () => {
+  const watched = { check: "Opened a chat on a phone", ran: true, result: "passed" as const, head: example.head, env: "local" as const };
+  expect(errs({ proof: [watched] })).toBe("");
+  expect(errs({ proof: [{ ...watched, result: undefined }] })).toContain('"result": "passed" or "failed"');
+  expect(errs({ proof: [{ ...watched, result: "ok" }] })).toContain('"result" is "passed" or "failed"');
+  expect(errs({ proof: [{ ...watched, note: "" }] })).toContain('"note" is a few words');
+  expect(proofStatus(watched, example.head)).toEqual({ verdict: "passed", older: false });
+  expect(proofStatus({ ...watched, result: "failed" }, example.head).verdict).toBe("failed");
+  expect(proofStatus({ ...watched, result: "failed", expect: "fail" }, example.head).verdict).toBe("red");
+});
+
+test("a run superseded by the same check at the head folds away; red-first runs and lone old runs stay", () => {
+  const proof = [
+    { check: "bun test", ran: true, exit: 1, head: "old1", expect: "fail" as const },
+    { check: "bun test", ran: true, exit: 1, head: "old1" },
+    { check: "bun test ", ran: true, exit: 0, head: "new" },
+    { check: "lint", ran: true, exit: 0, head: "old2" },
+    { check: "e2e", ran: false },
+  ];
+  expect([...superseded(proof, "new")]).toEqual([1]);
+});
+
+test("a big change can list folders, which count their files; a guide may have no map", () => {
+  const files = [
+    { path: "supabase/functions/", files: 429, add: 10, del: 900 },
+    { path: "README.md", add: 1, del: 0 },
+  ];
+  const stops = [{ title: "Comments go", why: "Noise.", files: ["supabase/functions/", "README.md"] }];
+  expect(errs({ files, stops, alsoTouched: [], lookHere: [], map: undefined })).toBe("");
+  expect(fileCount(files)).toBe(430);
+  // Whether a folder has its count is checked on save (compile.ts), so a guide saved before still renders.
+  expect(errs({ files: [{ path: "a/", files: 0 }], stops: [{ ...stops[0], files: ["a/"] }], alsoTouched: [], lookHere: [] })).toContain('"files" is how many files');
+  expect(errs({ map: undefined })).toContain('has a "focus" but the guide has no "map"');
+  expect(splitPath("supabase/functions/")).toEqual({ dir: "supabase/", name: "functions/" });
+  expect(splitPath("functions/")).toEqual({ dir: "", name: "functions/" });
+  const [item] = foldMirrors([
+    { path: "src/hooks/", files: 3, add: 1, del: 2 },
+    { path: "packages/web/src/hooks/", files: 4, add: 1, del: 2 },
+  ]);
+  expect(item).toMatchObject({ name: "hooks/", files: 7, roots: ["", "packages/web/"] });
 });
 
 test("section ids are kebab slugs of their headings", () => {

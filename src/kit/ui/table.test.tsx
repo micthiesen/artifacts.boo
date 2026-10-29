@@ -1,12 +1,13 @@
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 
 GlobalRegistrator.register();
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 const React = await import("react");
 const { act } = React;
 const { createRoot } = await import("react-dom/client");
-const { Table } = await import("./table.tsx");
+const { Table, overflows, nextOverflowAt, pickTitleColumn } = await import("./table.tsx");
+type Format = import("./table.tsx").Format;
 
 // Let React flush its scheduled work before tearing down the DOM globals.
 afterAll(async () => {
@@ -90,4 +91,54 @@ test("cardTitle picks the column that titles each card; labels wrap instead of b
   expect(labels.map((d) => d.textContent)).toEqual(["ID", "Walking estimate", "Cost"]);
   expect(labels.some((d) => d.className.includes("truncate"))).toBe(false);
   root.unmount();
+});
+
+describe("cards on narrow tables", () => {
+  test("a table is cards once it overflows, and stays so until the box grows", () => {
+    expect(overflows(500, 358)).toBe(true);
+    expect(overflows(358, 358)).toBe(false);
+    expect(overflows(359, 358)).toBe(false);
+    expect(overflows(0, 0)).toBe(false);
+    expect(nextOverflowAt(null, 358, 500)).toBe(358);
+    expect(nextOverflowAt(null, 358, 300)).toBeNull();
+    expect(nextOverflowAt(358, 340, 0)).toBe(358);
+    expect(nextOverflowAt(358, 358, 0)).toBe(358);
+    // Cards drop the box border, so the box grows a couple of pixels by itself: that is no reason to go back.
+    expect(nextOverflowAt(358, 360, 0)).toBe(358);
+    expect(nextOverflowAt(358, 700, 0)).toBeNull();
+  });
+
+  test("a rank is not the card's title", () => {
+    const rows = [
+      { rank: 1, name: "Alpha", why: "Because" },
+      { rank: 2, name: "Beta", why: "Since" },
+    ];
+    const cols = (f: Format) => [
+      { key: "rank", format: f },
+      { key: "name", format: "text" as Format },
+      { key: "why", format: "text" as Format },
+    ];
+    expect(pickTitleColumn(cols("number"), rows)?.key).toBe("name");
+    expect(pickTitleColumn(cols("integer"), rows)?.key).toBe("name");
+    expect(pickTitleColumn(cols("number"), rows, "why")?.key).toBe("why");
+    expect(pickTitleColumn(cols("number"), rows, "NAME")?.key).toBe("name");
+    const ids = [{ id: "E1", name: "A" }, { id: "E2", name: "B" }];
+    expect(pickTitleColumn([{ key: "id", format: "text" }, { key: "name", format: "text" }], ids)?.key).toBe("name");
+    // A first column that names things stays the title; so does one with no text column after it.
+    expect(pickTitleColumn([{ key: "name", format: "text" }, { key: "rank", format: "number" }], rows)?.key).toBe("name");
+    expect(pickTitleColumn([{ key: "rank", format: "number" }, { key: "score", format: "number" }], rows)?.key).toBe("rank");
+    expect(pickTitleColumn([{ key: "n", format: "number" }, { key: "name", format: "text" }], [{ n: 1.5, name: "x" }])?.key).toBe("n");
+  });
+
+  test("a card with many fields folds the rest behind More", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const row = Object.fromEntries(["t", "a", "b", "c", "d", "e", "f", "g", "h"].map((k, i) => [k, `v${i}`]));
+    const root = createRoot(container);
+    await act(async () => root.render(<Table data={[row]} cards="always" />));
+    expect(container.querySelectorAll("li > dl dt")).toHaveLength(6);
+    expect(container.querySelector("details summary")?.textContent).toContain("More (2)");
+    expect(container.querySelectorAll("details dt")).toHaveLength(2);
+    root.unmount();
+  });
 });

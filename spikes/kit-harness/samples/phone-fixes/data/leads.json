@@ -1,0 +1,50 @@
+[
+ {
+  "rank": 1,
+  "name": "Clinic number 1 with a long name",
+  "walk": "10 min",
+  "price": "$90",
+  "hours": "Mon\u2013Fri 9\u20135",
+  "phone": "604-555-0100",
+  "status": "Taking patients",
+  "notes": "Call first; the website is out of date",
+  "checked": "2026-10-28",
+  "source": "https://example.com"
+ },
+ {
+  "rank": 2,
+  "name": "Clinic number 2 with a long name",
+  "walk": "11 min",
+  "price": "$90",
+  "hours": "Mon\u2013Fri 9\u20135",
+  "phone": "604-555-0100",
+  "status": "Taking patients",
+  "notes": "Call first; the website is out of date",
+  "checked": "2026-10-28",
+  "source": "https://example.com"
+ },
+ {
+  "rank": 3,
+  "name": "Clinic number 3 with a long name",
+  "walk": "12 min",
+  "price": "$90",
+  "hours": "Mon\u2013Fri 9\u20135",
+  "phone": "604-555-0100",
+  "status": "Taking patients",
+  "notes": "Call first; the website is out of date",
+  "checked": "2026-10-28",
+  "source": "https://example.com"
+ },
+ {
+  "rank": 4,
+  "name": "Clinic number 4 with a long name",
+  "walk": "13 min",
+  "price": "$90",
+  "hours": "Mon\u2013Fri 9\u20135",
+  "phone": "604-555-0100",
+  "status": "Taking patients",
+  "notes": "Call first; the website is out of date",
+  "checked": "2026-10-28",
+  "source": "https://example.com"
+ }
+]

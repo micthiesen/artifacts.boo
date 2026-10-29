@@ -3,12 +3,16 @@
 // at a missing step or lights a node its picture doesn't have is refused with a reason, not shown wrong.
 // Everything added after the first version is optional, so guides written before it keep saving and showing.
 
-export type GuideFile = { path: string; add?: number; del?: number };
+/** A file, or a whole folder (`"supabase/functions/"`, ending in "/") with how many files under it changed. */
+export type GuideFile = { path: string; add?: number; del?: number; files?: number };
 export type GuideStop = { title: string; why: string; files: string[]; focus?: string; diff?: { file?: string; lines: string } };
 export type GuideProof = {
   check: string;
   ran: boolean;
+  /** A command's exit code. */
   exit?: number;
+  /** What a check a person watched showed (a browser walk-through, a staging run): it has no exit code. */
+  result?: "passed" | "failed";
   head?: string;
   /** "fail" for red-first evidence: a test run before the fix, which should have failed. */
   expect?: "pass" | "fail";
@@ -17,6 +21,8 @@ export type GuideProof = {
   link?: string;
   /** What the run reported, in its words: "212 passed". */
   count?: string;
+  /** Anything else worth a few words: what failed, what the run skipped. */
+  note?: string;
 };
 /** Same shape as <Delta>'s rows. */
 export type GuideMetric = { label: string; before: number; after: number; unit?: string; better: "up" | "down"; note?: string };
@@ -37,7 +43,8 @@ export type ChangeGuideData = {
   metrics?: GuideMetric[];
   metricsNote?: string;
   shots?: GuideShot[];
-  map: string;
+  /** Left out when nothing flows (a sweep, a rename): the guide then has no picture. */
+  map?: string;
   lookHere?: { q: string; stop: number }[];
   stops: GuideStop[];
   alsoTouched?: string[];
@@ -95,7 +102,8 @@ export function checkChangeGuide(value: unknown, nodes?: Set<string>): string[] 
   if (!isObj(value)) return ["must be a JSON object (see artifact_guide topic \"change\")"];
   const g = value;
   const out: string[] = [];
-  for (const k of ["head", "outcome", "where", "revert", "before", "after", "map"]) if (!isText(g[k])) out.push(`"${k}" is required text`);
+  for (const k of ["head", "outcome", "where", "revert", "before", "after"]) if (!isText(g[k])) out.push(`"${k}" is required text`);
+  if (g.map !== undefined && !isText(g.map)) out.push(`"map" is a Mermaid diagram, or leave it out when nothing flows (a sweep, a rename)`);
   if (g.url !== undefined && !isUrl(g.url)) out.push(`"url" is an http(s) link to the change`);
   if (g.links !== undefined) {
     const links = Array.isArray(g.links) ? g.links : [];
@@ -125,6 +133,7 @@ export function checkChangeGuide(value: unknown, nodes?: Set<string>): string[] 
       out.push(`each file is {path, add, del} with whole-number counts (leave counts out for a binary file)`);
       continue;
     }
+    if (f.files !== undefined && !(Number.isInteger(f.files) && (f.files as number) > 0)) out.push(`"${f.path}": "files" is how many files under the folder changed`);
     if (paths.has(f.path as string)) out.push(`"${f.path}" is listed twice in "files"`);
     paths.add(f.path as string);
   }
@@ -168,6 +177,7 @@ export function checkChangeGuide(value: unknown, nodes?: Set<string>): string[] 
     }
     if (s.focus !== undefined) {
       if (typeof s.focus !== "string") out.push(`${at}'s "focus" is node ids separated by spaces`);
+      else if (!isText(g.map) && s.focus.trim()) out.push(`${at} has a "focus" but the guide has no "map" to light`);
       else if (nodes) for (const id of s.focus.split(/\s+/).filter(Boolean)) if (!nodes.has(id)) out.push(`${at}'s focus "${id}" isn't a node in "map"`);
     }
     if (s.diff !== undefined) {
@@ -202,18 +212,22 @@ export function checkChangeGuide(value: unknown, nodes?: Set<string>): string[] 
     }
   }
 
-  if (!Array.isArray(g.proof)) out.push(`"proof" lists checks: [{check, ran: true, exit, head}] or [{check, ran: false}]`);
+  if (!Array.isArray(g.proof)) out.push(`"proof" lists checks: [{check, ran: true, exit, head}], [{check, ran: true, result, head}] for one a person watched, or [{check, ran: false}]`);
   else {
     for (const p of g.proof) {
       if (!isObj(p) || !isText(p.check) || typeof p.ran !== "boolean") {
-        out.push(`each "proof" item is {check, ran, exit?, head?, expect?, env?, link?, count?}`);
+        out.push(`each "proof" item is {check, ran, exit?, result?, head?, expect?, env?, link?, count?, note?}`);
         continue;
       }
-      if (p.ran && (!Number.isInteger(p.exit) || !isText(p.head))) out.push(`proof "${p.check}" ran, so it needs its "exit" code and the "head" commit it ran at`);
+      if (p.result !== undefined && p.result !== "passed" && p.result !== "failed") out.push(`proof "${p.check}": "result" is "passed" or "failed", what a check you watched showed`);
+      else if (p.ran && ((!Number.isInteger(p.exit) && p.result === undefined) || !isText(p.head))) {
+        out.push(`proof "${p.check}" ran, so it needs the "head" commit it ran at and its "exit" code, or for a check a person watched (no command), "result": "passed" or "failed"`);
+      }
       if (p.expect !== undefined && p.expect !== "pass" && p.expect !== "fail") out.push(`proof "${p.check}": "expect" is "pass", or "fail" for a test run before the fix to show it failed`);
       if (p.env !== undefined && !ENVS.includes(p.env as string)) out.push(`proof "${p.check}": "env" is one of ${ENVS.join(", ")}`);
       if (p.link !== undefined && !isUrl(p.link)) out.push(`proof "${p.check}": "link" is an http(s) link to the run`);
       if (p.count !== undefined && !isText(p.count)) out.push(`proof "${p.check}": "count" is what the run reported, like "212 passed"`);
+      if (p.note !== undefined && !isText(p.note)) out.push(`proof "${p.check}": "note" is a few words of text`);
     }
   }
 
@@ -237,6 +251,8 @@ export type FileItem = {
   name: string;
   add?: number;
   del?: number;
+  /** For a folder: how many files under it changed, all copies together. */
+  files?: number;
   /** Mirrored copies: every root (the part before the shared tail), in list order. "" is the repository's root. */
   roots?: string[];
   /** Every full path this line stands for. */
@@ -246,9 +262,12 @@ export type FileItem = {
 /** A directory's lines, or one line on its own when it is the only file from its directory. */
 export type FileGroup = { dir: string; items: FileItem[] };
 
-/** A path cut before its file name: "src/kit/ui/" and "table.tsx". The directory keeps its trailing slash. */
+/**
+ * A path cut before its file name: "src/kit/ui/" and "table.tsx". The directory keeps its trailing slash, and a
+ * folder keeps its own: "supabase/functions/" is "supabase/" and "functions/".
+ */
 export function splitPath(path: string): { dir: string; name: string } {
-  const i = path.lastIndexOf("/");
+  const i = path.lastIndexOf("/", path.length - 2);
   return { dir: path.slice(0, i + 1), name: path.slice(i + 1) };
 }
 
@@ -303,6 +322,7 @@ export function foldMirrors(files: GuideFile[]): FileItem[] {
     for (const m of members) done.add(m);
     const group = members.map((m) => files[m]!);
     const item: FileItem = { path: f.path, ...splitPath(f.path), add: sum(group.map((x) => x.add)), del: sum(group.map((x) => x.del)), paths: group.map((x) => x.path) };
+    if (f.files !== undefined) item.files = sum(group.map((x) => x.files ?? 1));
     if (c) item.roots = members.map((m) => segs[m]!.slice(0, segs[m]!.length - c.tail).join("/") + (segs[m]!.length > c.tail ? "/" : ""));
     out.push(item);
   });
@@ -345,14 +365,37 @@ export type ProofStatus = {
 export function proofStatus(p: GuideProof, head: string): ProofStatus {
   if (!p.ran) return { verdict: "not-run", older: false };
   const older = !!p.head && p.head !== head;
-  if (p.expect === "fail") return { verdict: p.exit !== 0 ? "red" : "failed", older };
-  return { verdict: p.exit === 0 ? "passed" : "failed", older };
+  const ok = p.result ? p.result === "passed" : p.exit === 0;
+  if (p.expect === "fail") return { verdict: ok ? "failed" : "red", older };
+  return { verdict: ok ? "passed" : "failed", older };
 }
 
-/** The guide's stepped map: one step per stop that has a `focus`, and which step each such stop is. */
+/** How many files a guide changed: a folder entry counts its files. */
+export function fileCount(files: GuideFile[]): number {
+  return files.reduce((n, f) => n + (f.files ?? 1), 0);
+}
+
+/**
+ * Runs the same check also made at the guide's head, so they only say what it was before: shown folded, as
+ * "Earlier runs". A red-first run is kept in view; it is evidence at its old commit.
+ */
+export function superseded(proof: GuideProof[], head: string): Set<number> {
+  const atHead = new Set(proof.filter((p) => p.ran && p.head === head).map((p) => p.check.trim()));
+  const out = new Set<number>();
+  proof.forEach((p, i) => {
+    if (p.ran && p.head !== head && p.expect !== "fail" && atHead.has(p.check.trim())) out.add(i);
+  });
+  return out;
+}
+
+/**
+ * The guide's stepped map: one step per stop that has a `focus`, and which step each such stop is. One step is
+ * no walk-through ("All 1 steps"), so a guide with fewer than two shows its map whole.
+ */
 export function mapSteps(stops: GuideStop[]): { steps: { focus: string; title: string; text: string }[]; stepOf: Map<number, number> } {
   const steps: { focus: string; title: string; text: string }[] = [];
   const stepOf = new Map<number, number>();
+  if (stops.filter((s) => s.focus?.trim()).length < 2) return { steps, stepOf };
   stops.forEach((s, i) => {
     if (!s.focus?.trim()) return;
     stepOf.set(i, steps.length);

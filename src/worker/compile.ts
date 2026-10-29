@@ -90,6 +90,7 @@ export async function compileFile(
     }
   }
   errors.push(...checkNames(path, code));
+  if (/\.(tsx|jsx)$/.test(path)) errors.push(...undeclaredTags(path, code));
   return { module: { path, code, classes: extractCandidates(source), blocks }, errors };
 }
 
@@ -119,6 +120,28 @@ function checkNames(path: string, code: string): CompileError[] {
       if (!/^[A-Z]/.test(name) || MDX_COMPONENTS.has(name) || declaredInModule(code, name)) continue;
       errors.push({ path, message: `<${name}> is not a kit component.${suggest(name, MDX_COMPONENTS)} See artifact_guide for the list.` });
     }
+  }
+  return errors;
+}
+
+/**
+ * A capitalized JSX tag whose name is never declared crashes at runtime ("Accordion is not defined") although
+ * the save passes. In the compiled module a tag is `_jsx(Name,`; anything that declares or mentions the name
+ * (import, param, destructuring, const, function, `as` rename, a string) is some other occurrence of it.
+ */
+function undeclaredTags(path: string, code: string): CompileError[] {
+  const errors: CompileError[] = [];
+  const seen = new Set<string>();
+  for (const m of code.matchAll(/\b_jsxs?\(([A-Z][\w$]*)(?=[.,)])/g)) {
+    const name = m[1]!;
+    if (seen.has(name)) continue;
+    seen.add(name);
+    const id = name.replace(/\$/g, "\\$");
+    const all = code.match(new RegExp(`(?<![\\w$])${id}(?![\\w$])`, "g"))?.length ?? 0;
+    const asTag = code.match(new RegExp(`\\b_jsxs?\\(${id}(?![\\w$])`, "g"))?.length ?? 0;
+    if (all > asTag) continue;
+    const hint = name === "React" ? `write <>…</> for a fragment, or import * as React from "react"` : MODULE_EXPORTS["@a/ui"]?.has(name) ? `add it to import { … } from "@a/ui"` : `import or declare it`;
+    errors.push({ path, message: `<${name}${name === "React" ? ".…" : ""}> is used but ${name} is never imported: ${hint}` });
   }
   return errors;
 }
@@ -542,6 +565,16 @@ async function changeGuideErrors(files: Record<string, string>, data: Record<str
       }
     }
     for (const message of checkChangeGuide(guide, map ? await mermaidNodeIds(map) : undefined)) errors.push({ path, message });
+    // Refused here, not in checkChangeGuide, so guides saved before these rules still render. Brackets stay
+    // allowed: app/[id]/page.tsx is a real path.
+    const listed = (guide as { files?: unknown } | null)?.files;
+    for (const f of Array.isArray(listed) ? listed : []) {
+      const { path: p, files: n } = (f ?? {}) as { path?: unknown; files?: unknown };
+      if (typeof p !== "string") continue;
+      if (/\*|\{[^}]*,[^}]*\}/.test(p)) errors.push({ path, message: `"files" has the pattern "${p}": list a folder instead, as {"path": "dir/", "files": <how many changed>, "add", "del"}` });
+      else if (p.endsWith("/") && n === undefined) errors.push({ path, message: `folder "${p}" needs "files": how many files under it changed` });
+      else if (!p.endsWith("/") && n !== undefined) errors.push({ path, message: `"${p}" has "files", which only a folder (a path ending in "/") has` });
+    }
   }
   return errors;
 }
@@ -583,6 +616,7 @@ export function dataWarnings(code: Record<string, string>, data: Record<string, 
     const missing = m[2].split(/[\s,]+/).filter((c) => c && !keys.has(c.toLowerCase()));
     if (missing.length) out.push(`Table data="${m[1]}" names columns its rows don't have (${missing.join(", ")}): every cell in them shows —`);
   }
+  out.push(...pageProseWarnings(code, data));
   // A Notes box whose placeholder lists fields ("Date; amount; rest time…", "Date / Project / Worked on") is a log
   // kept as free text: people end up writing rows by hand that a Ledger would keep, sort and total.
   for (const m of source.matchAll(/<Notes\b[^>]*?\bplaceholder=(?:"([^"]*)"|'([^']*)'|\{["'`]([^"'`]*)["'`]\})/g)) {
@@ -590,6 +624,45 @@ export function dataWarnings(code: Record<string, string>, data: Record<string, 
     const fields = placeholder.split(/\s*[;/|·]\s*|\s*,\s*(?=\p{Lu})/u).filter((f) => f.trim());
     if (fields.length >= 3 && fields.some((f) => /^(date|when)\b/i.test(f.trim()))) {
       out.push(`A Notes box asks for fields (${fields.slice(0, 4).join(", ")}${fields.length > 4 ? ", …" : ""}): that's a log; a Ledger with those fields keeps each entry as a row people add, edit and sort`);
+    }
+  }
+  return out;
+}
+
+const MONTH = "(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\\.?";
+const DATE_AT_START = new RegExp(`^(?:\\d{4}-\\d{2}-\\d{2}|\\d{1,2}(?:st|nd|rd|th)?\\s+${MONTH}|${MONTH}\\s+\\d{1,2})\\b`, "i");
+const CHECKED_DATE = new RegExp(`\\b(?:last checked|checked on)\\s+(?:\\d{4}-\\d{2}-\\d{2}|\\d{1,2}(?:st|nd|rd|th)?\\s+${MONTH}\\b|${MONTH}\\s+\\d{1,2}\\b)`, "i");
+
+/** Log-shaped headings, hand-written freshness lines and phone-hostile tables in the page's prose and tags. */
+function pageProseWarnings(code: Record<string, string>, data: Record<string, JsonValue>): string[] {
+  const out: string[] = [];
+  const mdx = pageCode(Object.fromEntries(Object.entries(code).filter(([p]) => p.endsWith(".mdx")))).join("\n");
+  const all = pageCode(code).join("\n");
+  if (!/<Log\b/.test(all)) {
+    // Four at one level: a checkpoint log. Fewer, or mixed levels, is more likely an agenda or an itinerary.
+    const levels = new Map<number, string[]>();
+    for (const m of mdx.matchAll(/^(#{1,6})[ \t]+(.+)$/gm)) {
+      const text = m[2]!.trim();
+      if (DATE_AT_START.test(text)) levels.set(m[1]!.length, [...(levels.get(m[1]!.length) ?? []), text]);
+    }
+    const dated = [...levels.values()].sort((a, b) => b.length - a.length)[0] ?? [];
+    if (dated.length >= 4) out.push(`${dated.length} headings are dates (${dated.slice(0, 2).map((t) => `"${t}"`).join(", ")}, …): dated headings are a log; use <Log> over data/log.json and append entries`);
+  }
+  if (!/<AsOf\b/.test(all)) {
+    const m = CHECKED_DATE.exec(mdx);
+    if (m) out.push(`"${m[0]}" is a hand-written freshness line: use <AsOf checked="YYYY-MM-DD" next="…"> so it ages on its own`);
+  }
+  for (const attrs of kitTags(code, "Table")) {
+    const file = /\bdata=["']([^"']+)["']/.exec(attrs)?.[1];
+    if (!file || /\blimit=/.test(attrs) || /\bcards=["']never["']/.test(attrs)) continue;
+    const rows = data[file.startsWith("data/") ? file : `data/${file}`];
+    if (!Array.isArray(rows) || !rows.length) continue;
+    const named = /\bcolumns=["']([^"']+)["']/.exec(attrs)?.[1];
+    const cols = named
+      ? named.split(/[\s,]+/).filter(Boolean).length
+      : new Set(rows.slice(0, 50).flatMap((r) => (r && typeof r === "object" && !Array.isArray(r) ? Object.keys(r) : []))).size;
+    if (cols > 3 && rows.length * cols > 150) {
+      out.push(`Table data="${file}" is ${rows.length} rows × ${cols} columns, which on phones is ${rows.length} cards: pass limit (a "Show all" toggle), or fewer columns`);
     }
   }
   return out;

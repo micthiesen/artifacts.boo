@@ -22,10 +22,11 @@ const findings = {
   method: { window: "October", sample: "412 runs", caveats: ["Cancelled runs left out."] },
   findings: [
     { ...base, id: "low", title: "Skip docs runs", impact: "low", effort: "small", status: "shipped" },
-    { ...base, id: "big", title: "Shard e2e", impact: "high", effort: "large", status: "doing", metrics: [{ label: "e2e", before: 840, after: 250, unit: "s", better: "down" }] },
+    { ...base, id: "big", title: "Shard e2e", impact: "high", effort: "large", status: "doing", metrics: [{ label: "e2e", before: 840, after: 250, unit: "s", better: "down", expected: true }] },
     { ...base, id: "quick", title: "Cache dependencies", impact: "high", effort: "small", confidence: "measured", status: "shipped" },
-    { ...base, id: "call", title: "Bigger runners", impact: "medium", effort: "small", status: "decide", owner: "Dana" },
+    { ...base, id: "call", title: "Bigger runners", impact: "medium", effort: "small", status: "decide", owner: "Dana", decide: { options: ["Try it", "Keep 4 cores"], recommended: "Try it" } },
   ],
+  minor: [{ title: "Trim lint cache", change: "Delete the step." }],
   notWorth: [{ title: "Self-hosted runners", why: "Too few minutes." }],
   inventory: { title: "Every job", data: "jobs.json", top: 3 },
 };
@@ -96,4 +97,18 @@ test("a bad file shows what to fix instead of the page", async () => {
   await show(<Findings />);
   expect(container.querySelector(".art-findings")).toBeNull();
   expect(container.textContent).toContain('"impact" is one of high, medium, low');
+});
+
+test("a finding's decide shows a Decision, expected numbers say so, and smaller wins follow the ranked list", async () => {
+  await show(<Findings />);
+  const call = container.querySelector("#finding-call")!;
+  expect(call.textContent).toContain("Bigger runners");
+  expect(call.textContent).toContain("Try it");
+  expect(call.textContent).toContain("Recommended");
+  expect(container.querySelector("#finding-big")!.textContent).toContain("Expected after value");
+  expect(container.querySelector("#finding-quick")!.textContent).not.toContain("Expected");
+  const text = container.textContent!;
+  expect(text).toContain("Smaller wins");
+  expect(text).toContain("Trim lint cache");
+  expect(container.querySelectorAll("li[id^=finding-]").length).toBe(4);
 });

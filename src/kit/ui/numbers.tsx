@@ -2,10 +2,10 @@
 // in numbers-impl.tsx, loaded the first time a page uses one.
 import * as React from "react";
 import { ErrorBoundary } from "./error.tsx";
-import type { Better, DeltaRow } from "./numbers-impl.tsx";
+import type { Better, DeltaRow, Tolerance } from "./numbers-impl.tsx";
 import { Skeleton } from "./primitives.tsx";
 
-export type { Better, DeltaRow } from "./numbers-impl.tsx";
+export type { Better, DeltaRow, Tolerance } from "./numbers-impl.tsx";
 
 const DeltaImpl = React.lazy(() => import("./numbers-impl.tsx").then((m) => ({ default: m.DeltaImpl })));
 const BulletBarImpl = React.lazy(() => import("./numbers-impl.tsx").then((m) => ({ default: m.BulletBarImpl })));
@@ -14,8 +14,9 @@ const BulletBarImpl = React.lazy(() => import("./numbers-impl.tsx").then((m) => 
  * Before and after for a few measures: Label | Before | After | Change, with the change worked out (absolute and
  * percent) and told as better or worse by `better`. Rows come from `data` (a data file) or `rows`, each
  * `{label, before, after, unit?, better: "up"|"down", note?}`. `chart` adds a before-to-after line per row.
+ * `tolerance` (a number in the unit, or "5%" of before; also per row) makes smaller changes read "about the same".
  */
-export function Delta(props: { data?: string; rows?: DeltaRow[]; title?: React.ReactNode; chart?: boolean }) {
+export function Delta(props: { data?: string; rows?: DeltaRow[]; title?: React.ReactNode; chart?: boolean; tolerance?: Tolerance }) {
   return (
     <ErrorBoundary label="Delta">
       <React.Suspense fallback={<Skeleton className="my-6 h-40" />}>

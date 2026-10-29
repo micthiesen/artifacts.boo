@@ -1,0 +1,110 @@
+{
+ "head": "889f75a",
+ "url": "https://github.com/acme/app/pull/3165",
+ "outcome": "A chat message whose send failed should no longer show the delivered check.",
+ "where": "Chat \u203a a message you sent \u203a the small check under it",
+ "risk": "low",
+ "riskWhy": "The test fails against the old code.",
+ "revert": "Safe",
+ "ask": {
+  "kind": "approve",
+  "text": "Checks cover it."
+ },
+ "before": "A failed send still showed a delivered check.",
+ "after": "Only sent messages show it.",
+ "map": "flowchart TD\n  S([Send]) --> F{Failed?}\n  F -- yes --> X[Hide check]:::added\n  F -- no --> C[Show check]",
+ "stops": [
+  {
+   "title": "Failed sends hide the check",
+   "why": "The row reads the send state first.",
+   "files": [
+    "packages/web/src/components/chat/MessageRow.deliveryStatus.test.tsx",
+    "src/components/chat/MessageRow.deliveryStatus.test.tsx",
+    "packages/web/src/components/initiatives/components/integrationTemplates.test.ts",
+    "packages/web/src/components/initiatives/components/a.ts"
+   ],
+   "focus": "X"
+  },
+  {
+   "title": "Comments go",
+   "why": "Noise.",
+   "files": [
+    "supabase/functions/",
+    "packages/core/",
+    "src/x.ts"
+   ]
+  }
+ ],
+ "proof": [
+  {
+   "check": "bun test packages/web/src/components/chat/MessageRow.deliveryStatus.test.tsx",
+   "ran": true,
+   "exit": 1,
+   "head": "71840a8",
+   "expect": "fail",
+   "env": "local"
+  },
+  {
+   "check": "bun run lint:changed",
+   "ran": true,
+   "exit": 0,
+   "head": "71840a8",
+   "env": "local"
+  },
+  {
+   "check": "bun run lint:changed",
+   "ran": true,
+   "exit": 0,
+   "head": "889f75a",
+   "env": "local",
+   "count": "0 problems"
+  },
+  {
+   "check": "Sent a message offline on an iPhone and watched the row",
+   "ran": true,
+   "result": "passed",
+   "head": "889f75a",
+   "env": "staging",
+   "note": "airplane mode, then back online"
+  }
+ ],
+ "files": [
+  {
+   "path": "packages/web/src/components/chat/MessageRow.deliveryStatus.test.tsx",
+   "add": 120,
+   "del": 4
+  },
+  {
+   "path": "src/components/chat/MessageRow.deliveryStatus.test.tsx",
+   "add": 120,
+   "del": 4
+  },
+  {
+   "path": "packages/web/src/components/initiatives/components/integrationTemplates.test.ts",
+   "add": 9,
+   "del": 2
+  },
+  {
+   "path": "packages/web/src/components/initiatives/components/a.ts",
+   "add": 1,
+   "del": 2
+  },
+  {
+   "path": "supabase/functions/",
+   "files": 429,
+   "add": 12,
+   "del": 2210
+  },
+  {
+   "path": "packages/core/",
+   "files": 88,
+   "add": 3,
+   "del": 610
+  },
+  {
+   "path": "src/x.ts",
+   "add": 1,
+   "del": 1
+  }
+ ]
+}

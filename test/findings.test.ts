@@ -140,3 +140,20 @@ test("a crowded quadrant goes two abreast with rank-only labels and stays inside
   }
   expect(new Set(model.points.map((p) => `${p.x},${p.y}`)).size).toBe(12);
 });
+
+test("decide, minor and expected are optional and each refused with its fix", () => {
+  const ok = { options: ["Yes", "No"], recommended: "Yes" };
+  expect(check({ ...example, findings: [finding({ decide: ok })] })).toBe("");
+  const bad = (d: unknown) => check({ ...example, findings: [finding({ decide: d as never })] });
+  expect(bad({ options: ["Only"] })).toContain('"decide" is {question?, options, recommended?} with 2 to 5');
+  expect(bad({ options: ["a", "b", "c", "d", "e", "f"] })).toContain("2 to 5");
+  expect(bad({ options: ["a", "a"] })).toContain("each different");
+  expect(bad({ ...ok, recommended: "Maybe" })).toContain("word for word");
+  expect(bad({ ...ok, question: 3 })).toContain('"decide.question" is text');
+  expect(check({ ...example, minor: [{ title: "Small", change: "Do it." }] })).toBe("");
+  expect(check({ ...example, minor: [{ title: "Small" }] })).toContain('"minor" is a list of {title, change}');
+  expect(check({ ...example, minor: Array.from({ length: 31 }, () => ({ title: "t", change: "c" })) })).toContain("at most 30");
+  const metric = (expected: unknown) => check({ ...example, findings: [finding({ metrics: [{ label: "m", before: 1, after: 2, better: "up", expected } as never] })] });
+  expect(metric(true)).toBe("");
+  expect(metric("yes")).toContain('"expected" is true or false');
+});

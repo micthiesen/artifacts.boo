@@ -48,7 +48,7 @@ change (topic "change").
       "change": "Split Playwright into 4 shards with --shard and merge the reports.",
       "benefit": "The e2e job drops from 14 to about 4 minutes.",
       "validate": "Median CI time on main over a week.",
-      "metrics": [{ "label": "e2e job", "before": 840, "after": 250, "unit": "s", "better": "down", "note": "trial branch, 20 runs" }],
+      "metrics": [{ "label": "e2e job", "before": 840, "after": 250, "unit": "s", "better": "down", "note": "trial branch, 20 runs", "expected": true }],
       "owner": "Dana"
     },
     {
@@ -66,8 +66,12 @@ change (topic "change").
       "impact": "medium", "effort": "small", "confidence": "guess", "status": "decide",
       "change": "Switch the test job to the 8-core larger runner, or keep 4 cores. I'd try it for a week.",
       "benefit": "Perhaps 30% faster unit tests, at twice the price per minute.",
-      "validate": "A week of runs, and the bill."
+      "validate": "A week of runs, and the bill.",
+      "decide": { "question": "Move tests to 8 vCPU runners?", "options": ["Try it for a week", "Keep 4 cores"], "recommended": "Try it for a week" }
     }
+  ],
+  "minor": [
+    { "title": "Drop the unused lint cache step", "change": "Delete the cache step in lint.yml; it never hits." }
   ],
   "notWorth": [
     { "title": "Self-hosted runners", "why": "They save money only above about 40,000 minutes a month; we use 9,000." }
@@ -101,12 +105,22 @@ change (topic "change").
   - `metrics`: measured before and after numbers, never typed into a sentence
     or a pipe table: `{label, before, after, unit?, better: "up"|"down",
     note?}`. Numbers stay numbers and units go in `unit` (`ms`, `s`, `MB`,
-    `%`, `$`); the change is worked out and told as better or worse.
+    `%`, `$`); the change is worked out and told as better or worse. Before
+    a fix ships, `after` is what you expect: add `"expected": true` and the
+    row says so.
   - `status`: `open` (the default), `doing`, `shipped`, `skipped`, or
-    `decide` when it waits on the reader's choice (shown as "Your call"; put
-    the options and your recommendation in `change`).
+    `decide` when it waits on the reader's choice (shown as "Your call"; the
+    question goes in `decide`).
+  - `decide`: `{question?, options, recommended?}`, 2 to 5 short options, on a
+    finding that waits on the reader. It shows a Decision inside the finding
+    (`question` defaults to the title) that remembers the answer, who gave
+    it and when; read it with `artifact_state` at `decide/finding-<id>`.
+    `recommended` is one of the options, word for word.
   - `owner`, and `link` (a pull request, ticket or dashboard), when there are
     any.
+- `minor`: up to 30 smaller wins, `{title, change}`, that don't earn a rank.
+  They show after the findings, outside the 12 and the chart. Anything that
+  needs a number or a validation is a finding.
 - `notWorth`: ideas a reader would suggest that you checked and rejected,
   each with the reason. It saves the next audit from redoing them.
 - `inventory`: the long table behind the findings (every endpoint, every
@@ -117,9 +131,10 @@ change (topic "change").
 ## Keep it current
 
 When a fix ships, set its `status` with `artifact_patch_data` (and add its
-`metrics` once measured), passing a `note` ("Sharding shipped"). Don't add a
-Callout or a "Shipped" table by hand: the roll-up under the answer and each
-row's badge already say where things stand.
+`metrics` once measured), passing a `note` ("Sharding shipped"). When a fix
+ships, replace its expected numbers with measured ones and drop `expected`.
+Never add a Callout, a "Shipped" table or rewritten prose for status: the
+roll-up under the answer and each row's badge already say where things stand.
 
 ## What the save refuses
 
@@ -130,5 +145,7 @@ are no findings or more than 12; two findings share an `id`, or an id has
 characters other than letters, digits, `-` and `_`; a title is over 8 words;
 `impact`, `effort`, `confidence` or `status` isn't one of its words; a
 finding has no `change` or `benefit`; a metric isn't
-`{label, before, after, unit?, better}` with numbers; a link isn't http(s);
+`{label, before, after, unit?, better}` with numbers; a link isn't http(s); `decide` lacks 2 to 5 different options or
+`recommended` isn't one of them; `minor` has over 30 items or one lacks
+`title` or `change`;
 or `inventory.data` names a data file that doesn't exist.

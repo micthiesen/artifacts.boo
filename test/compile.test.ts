@@ -169,3 +169,59 @@ test("recipe and evidence checks only look at the kit's own components, read who
   const noEmail = await buildArtifact({ "index.mdx": `# T\n\n<Decision id="go" question="Ship?" options={["Yes", "No"]} deciders={["Sam"]} />\n` });
   expect(noEmail.errors[0]?.message).toContain("literally");
 });
+
+test("an undeclared JSX component in TSX is refused; declared forms are not", async () => {
+  const bad = await compileFile("app.tsx", `import { Poll } from "@a/ui";\nexport default () => <div><Poll id="p" options={["a"]} /><Accordion>x</Accordion></div>;`, files);
+  expect(bad.errors.map((e) => e.message)).toEqual([expect.stringContaining('<Accordion> is used but Accordion is never imported: add it to import { … } from "@a/ui"')]);
+  const member = await compileFile("app.tsx", `export default () => <Foo.Bar />;`, files);
+  expect(member.errors[0]?.message).toContain("<Foo> is used but Foo is never imported");
+  const fragment = await compileFile("app.tsx", `export default () => <React.Fragment />;`, files);
+  expect(fragment.errors[0]?.message).toContain("write <>…</> for a fragment");
+  // A browser global is no component either.
+  expect((await compileFile("app.tsx", `export default () => <Map />;`, files)).errors[0]?.message).toContain("<Map> is used but");
+  const okSources = [
+    `import { Accordion } from "@a/ui";\nexport default () => <Accordion />;`,
+    `import { Accordion as Acc } from "@a/ui";\nexport default () => <Acc />;`,
+    `import * as UI from "@a/ui";\nexport default () => <UI.Accordion />;`,
+    `import Chart from "./chart";\nexport default () => <Chart />;`,
+    `export default function App({ Icon }: { Icon: React.ComponentType }) { return <Icon />; }`,
+    `export default ({ icon: Icon }: any) => <Icon />;`,
+    `import { A, B } from "lucide-react";\nconst cond = true;\nexport default () => { const Icon = cond ? A : B; return <Icon />; };`,
+    `export default () => <Row />;\nfunction Row() { return <p />; }`,
+    `export default () => <Row />;\nconst Row = () => <p />;`,
+    `export default () => <>{[1].map(() => <Item key="a" />)}</>;\nclass Item extends Object {}`,
+    `// <Ghost /> in a comment\nexport default () => <p>{"<Ghost>"} and &lt;Ghost&gt;</p>;`,
+  ];
+  for (const src of okSources) {
+    const r = await compileFile("app.tsx", src, files);
+    expect(r.errors.filter((e) => e.message.includes("never imported"))).toEqual([]);
+  }
+});
+
+test("save warnings for dated headings, hand-written freshness and wide tables", async () => {
+  const { dataWarnings } = await import("../src/worker/compile.ts");
+  const log = dataWarnings({ "index.mdx": "## 24 October checkpoint\n\nx\n\n## 2026-10-25\n\n## Oct 29 update\n\n## 30 Oct\n" }, {});
+  expect(log.some((w) => w.includes("use <Log> over data/log.json"))).toBe(true);
+  // Three, or mixed levels (an itinerary's days under a trip), aren't a log.
+  expect(dataWarnings({ "index.mdx": "## 12 March: Rome\n## 13 March: Florence\n## 14 March: Siena\n" }, {})).toEqual([]);
+  expect(dataWarnings({ "index.mdx": "## 24 October checkpoint\n### 2026-10-25\n## 1 Nov\n### 2 Nov\n" }, {})).toEqual([]);
+  expect(dataWarnings({ "index.mdx": "<Log />\n## 1 May\n## 2 May\n## 3 May\n" }, {}).some((w) => w.includes("<Log>"))).toBe(false);
+  expect(dataWarnings({ "index.mdx": "```\n## 1 May\n## 2 May\n## 3 May\n```\n" }, {})).toEqual([]);
+
+  const fresh = (s: string) => dataWarnings({ "index.mdx": s }, {}).filter((w) => w.includes("<AsOf"));
+  expect(fresh("Last checked 24 October 2026.")).toHaveLength(1);
+  expect(fresh("As of 3 March the rule applies.")).toEqual([]);
+  expect(fresh("Checked on 2026-10-29")).toHaveLength(1);
+  expect(fresh('<AsOf checked="2026-10-29" />\nLast checked 24 October')).toEqual([]);
+  expect(fresh("As of now we agree. `as of May 5`")).toEqual([]);
+
+  const rows = Array.from({ length: 40 }, (_, i) => ({ a: i, b: "x", c: "y", d: "z" }));
+  const wide = (tag: string) => dataWarnings({ "index.mdx": tag }, { "data/r.json": rows as never }).filter((w) => w.includes("cards"));
+  expect(wide('<Table data="r.json" />')[0]).toContain("40 cards");
+  expect(wide('<Table data="r.json" limit={10} />')).toEqual([]);
+  expect(wide('<Table data="r.json" onRowClick={(r) => go(r)} limit={10} />')).toEqual([]);
+  expect(wide('<Table data="r.json" cards="never" />')).toEqual([]);
+  expect(wide('<Table data="r.json" columns="a b" />')).toEqual([]);
+  const few = Array.from({ length: 10 }, (_, i) => ({ a: i, b: "x", c: "y", d: "z" }));
+  expect(dataWarnings({ "index.mdx": '<Table data="r.json" />' }, { "data/r.json": few as never }).some((w) => w.includes("cards"))).toBe(false);
+});

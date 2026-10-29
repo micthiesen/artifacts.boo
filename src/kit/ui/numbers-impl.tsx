@@ -6,7 +6,9 @@ import { useRows } from "./table.tsx";
 import { cn } from "./utils.ts";
 
 export type Better = "up" | "down";
-export type DeltaRow = { label: string; before: number; after: number; unit?: string; better: Better; note?: string };
+export type DeltaRow = { label: string; before: number; after: number; unit?: string; better: Better; note?: string; tolerance?: Tolerance };
+/** A change smaller than this reads as "about the same": a number in the row's unit, or a share of before ("5%"). */
+export type Tolerance = number | string;
 
 // ---- Units and numbers ---------------------------------------------------------
 
@@ -81,22 +83,33 @@ export type DeltaResult = {
   verdict: "better" | "worse" | "same";
   /** "−1.2 s · −38%", or "No change". */
   change: string;
+  /** The change is real but within the tolerance: it reads as about the same, whichever way it went. */
+  tolerated: boolean;
 };
+
+/** A tolerance as an amount in the row's unit; "5%" is 5% of before. Anything unreadable, negative or absent is 0. */
+export function toleranceAmount(t: Tolerance | undefined, before: number): number {
+  if (t === undefined || t === null) return 0;
+  const m = typeof t === "string" ? /^\s*(\d+(?:\.\d+)?)\s*(%?)\s*$/.exec(t) : null;
+  const n = typeof t === "number" ? t : m ? (m[2] ? (Math.abs(before) * Number(m[1])) / 100 : Number(m[1])) : NaN;
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
 
 /**
  * What a before → after change amounts to. A change in a percentage is told in percentage points ("−2 pp"),
  * since "−50%" of a percentage is ambiguous on its own; the relative change follows it as usual.
  */
-export function computeDelta(row: Pick<DeltaRow, "before" | "after" | "unit" | "better">): DeltaResult {
+export function computeDelta(row: Pick<DeltaRow, "before" | "after" | "unit" | "better" | "tolerance">, defaultTolerance?: Tolerance): DeltaResult {
   const { before, after, unit = "" } = row;
   const diff = after - before;
   const flat = Math.abs(diff) <= 1e-9 * Math.max(1, Math.abs(before), Math.abs(after));
-  if (flat) return { diff: 0, pct: 0, direction: "flat", verdict: "same", change: "No change" };
+  if (flat) return { diff: 0, pct: 0, direction: "flat", verdict: "same", change: "No change", tolerated: false };
   const pct = before === 0 ? null : (diff / Math.abs(before)) * 100;
   const direction = diff > 0 ? "up" : "down";
-  const verdict = direction === (row.better === "down" ? "down" : "up") ? "better" : "worse";
+  const tolerated = Math.abs(diff) <= toleranceAmount(row.tolerance ?? defaultTolerance, before) * (1 + 1e-9);
+  const verdict = tolerated ? "same" : direction === (row.better === "down" ? "down" : "up") ? "better" : "worse";
   const abs = formatQuantity(diff, unit === "%" ? "pp" : unit, true);
-  return { diff, pct, direction, verdict, change: pct === null ? abs : `${abs} · ${formatPercent(pct)}` };
+  return { diff, pct, direction, verdict, change: pct === null ? abs : `${abs} · ${formatPercent(pct)}`, tolerated };
 }
 
 /** A round number at or above x, for an axis end: 1, 2, 2.5 or 5 times a power of ten. */
@@ -113,6 +126,9 @@ export function rowProblem(r: Record<string, unknown>): string | null {
   if (typeof r.before !== "number" || !Number.isFinite(r.before)) return `"${r.label}": "before" is a number`;
   if (typeof r.after !== "number" || !Number.isFinite(r.after)) return `"${r.label}": "after" is a number`;
   if (r.better !== "up" && r.better !== "down") return `"${r.label}": "better" is "up" or "down"`;
+  const t = r.tolerance;
+  if (t !== undefined && !(typeof t === "number" ? t >= 0 : typeof t === "string" && /^\s*\d+(\.\d+)?\s*%?\s*$/.test(t)))
+    return `"${r.label}": "tolerance" is a number or a share like "5%"`;
   return null;
 }
 
@@ -141,7 +157,7 @@ function Dumbbell({ before, after, verdict }: { before: number; after: number; v
 // From 640 px it's a table row; cells keep DOM order Label, Before, After, Change so either reads the same aloud.
 const CELL = "sm:col-auto sm:row-auto";
 
-export function DeltaImpl({ data, rows, title, chart }: { data?: string; rows?: DeltaRow[]; title?: React.ReactNode; chart?: boolean }) {
+export function DeltaImpl({ data, rows, title, chart, tolerance }: { data?: string; rows?: DeltaRow[]; title?: React.ReactNode; chart?: boolean; tolerance?: Tolerance }) {
   const raw = useRows(data ?? rows ?? []);
   const cols = chart ? "sm:grid-cols-[minmax(0,1fr)_auto_auto_auto_minmax(5rem,8rem)]" : "sm:grid-cols-[minmax(0,1fr)_auto_auto_auto]";
   return (
@@ -167,8 +183,8 @@ export function DeltaImpl({ data, rows, title, chart }: { data?: string; rows?: 
             );
           }
           const row = r as unknown as DeltaRow;
-          const d = computeDelta(row);
-          const Arrow = d.direction === "up" ? ArrowUp : d.direction === "down" ? ArrowDown : Minus;
+          const d = computeDelta(row, tolerance);
+          const Arrow = d.tolerated ? Minus : d.direction === "up" ? ArrowUp : d.direction === "down" ? ArrowDown : Minus;
           return (
             <div role="row" key={i} data-speak="delta" className="col-span-full grid grid-cols-subgrid items-baseline gap-x-4 gap-y-0.5 px-4 py-3 sm:gap-x-6">
               <div role="rowheader" className={cn("col-start-1 row-start-1 min-w-0 font-medium [overflow-wrap:anywhere]", CELL)}>
@@ -187,6 +203,7 @@ export function DeltaImpl({ data, rows, title, chart }: { data?: string; rows?: 
                   <Arrow aria-hidden className="size-3.5 shrink-0 self-center" />
                   <span className="whitespace-nowrap">{d.change}</span>
                   {d.verdict !== "same" && <span className="font-medium whitespace-nowrap">· {d.verdict}</span>}
+                  {d.tolerated && <span className="font-medium whitespace-nowrap">· about the same</span>}
                 </span>
               </div>
               {chart && (

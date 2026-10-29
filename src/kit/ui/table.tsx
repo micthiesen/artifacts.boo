@@ -172,16 +172,19 @@ export type TableProps = {
   limit?: number;
   /**
    * Rows as cards (the first column as each card's title, the rest as label: value): "auto" (the default) on
-   * phones when there are more than three columns, "always", or "never" (a table that scrolls sideways).
+   * phones when there are more than three columns or the table would be wider than the page, "always", or "never" (a table that scrolls sideways).
    */
   cards?: "auto" | "always" | "never";
-  /** The column each card is titled by (default: the first). It isn't repeated among the card's labels. */
+  /**
+   * The column each card is titled by. Default: the first, unless it only numbers the rows (1, 2, E1), then the
+   * first text column. It isn't repeated among the card's labels.
+   */
   cardTitle?: string;
   className?: string;
 };
 
 const PHONE = "(max-width: 639px)";
-function usePhone(): boolean {
+export function usePhone(): boolean {
   return useSyncExternalStore(
     (cb) => {
       const m = matchMedia(PHONE);
@@ -190,6 +193,134 @@ function usePhone(): boolean {
     },
     () => matchMedia(PHONE).matches,
     () => false,
+  );
+}
+
+/** True when a table is wider than the box it sits in (a pixel of slack for rounding). */
+export function overflows(tableWidth: number, containerWidth: number): boolean {
+  return containerWidth > 0 && tableWidth > containerWidth + 1;
+}
+
+/** How much wider the box must get before cards turn back into a table: cards drop the box's border, so it grows a little by itself. */
+const REGROW_PX = 24;
+
+/**
+ * Where the cards-because-it-overflows decision stands. `prev` is the container width at which the table last
+ * overflowed (null: it fits, or hasn't been measured). Once it overflowed it stays cards until the container
+ * grows well past that width (a rotation, a wider window), because a table shown as cards can't be measured;
+ * then it gets measured again.
+ */
+export function nextOverflowAt(prev: number | null, containerWidth: number, tableWidth: number): number | null {
+  if (prev !== null) return containerWidth > prev + REGROW_PX ? null : prev;
+  return overflows(tableWidth, containerWidth) ? containerWidth : null;
+}
+
+/**
+ * Whether the table inside `wrapper` is too wide for it. Measured before paint, so a phone never sees the clipped
+ * table first, then again when the wrapper or the table resizes (a font arriving, rows changing) and when `key`
+ * changes. False until measured, and where nothing can be measured. The last answer lives in a ref so a
+ * measurement never re-runs the effect: switching to cards changes the layout it measures.
+ */
+export function useOverflowCards(wrapper: React.RefObject<HTMLElement | null>, enabled: boolean, key?: unknown): boolean {
+  const [at, setAt] = React.useState<number | null>(null);
+  const last = React.useRef<number | null>(null);
+  React.useLayoutEffect(() => {
+    const el = wrapper.current;
+    last.current = null;
+    if (!el || !enabled) {
+      setAt(null);
+      return;
+    }
+    const check = () => {
+      const next = nextOverflowAt(last.current, el.clientWidth, el.querySelector("table")?.offsetWidth ?? 0);
+      if (next === last.current) return;
+      last.current = next;
+      setAt(next);
+    };
+    check();
+    let frame = 0;
+    // A frame later, not inside the observer's callback: a change it makes would resize what it observes.
+    const later = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(check);
+    };
+    const ro = typeof ResizeObserver === "function" ? new ResizeObserver(later) : null;
+    ro?.observe(el);
+    const table = el.querySelector("table");
+    if (table) ro?.observe(table);
+    let live = true;
+    document.fonts?.ready.then(() => live && later());
+    return () => {
+      live = false;
+      ro?.disconnect();
+      cancelAnimationFrame(frame);
+    };
+  }, [wrapper, enabled, key]);
+  return enabled && at !== null;
+}
+
+/** A rank or id ("1", 7, "E1"): a column that numbers rows rather than naming them. */
+function isRankLike(c: { key: string; format: Format }, rows: Row[]): boolean {
+  const vals = rows.map((r) => r[c.key]).filter((v) => v !== null && v !== undefined && v !== "");
+  if (!vals.length || new Set(vals).size !== vals.length) return false;
+  if (c.format === "number" || c.format === "integer") {
+    if (!vals.every((v) => typeof v === "number" && Number.isInteger(v))) return false;
+    // A year or a count is a value worth a title's place; a rank is named so, or counts 1, 2, 3.
+    const sorted = [...(vals as number[])].sort((a, b) => a - b);
+    return /^(#|no\.?|n|rank|id|step|priority|pos(ition)?)$/i.test(c.key) || sorted.every((v, i) => v === i + 1);
+  }
+  return c.format === "text" && vals.every((v) => typeof v === "string" && /^[A-Za-z]{0,3}[-#]?\d+$/.test(v));
+}
+
+/**
+ * The column a card is titled by: the one named by `cardTitle` (in any case), else the first, unless the first
+ * only numbers the rows (1, 2, E1) and a text column follows: then that one. The rank stays on the card as a field.
+ */
+export function pickTitleColumn<C extends { key: string; format: Format }>(cols: C[], rows: Row[], cardTitle?: string): C | undefined {
+  const named = cardTitle ? cols.find((c) => c.key === cardTitle || c.key.toLowerCase() === cardTitle.toLowerCase()) : undefined;
+  if (named) return named;
+  const first = cols[0];
+  if (first && isRankLike(first, rows)) {
+    const text = cols.slice(1).find((c) => c.format === "text" && !isRankLike(c, rows));
+    if (text) return text;
+  }
+  return first;
+}
+
+const isBlank = (v: unknown) => v === null || v === undefined || v === "";
+/** Fields a card shows before the rest fold behind "More" (a wide row would otherwise be a screenful of cards). */
+export const CARD_FIELDS = 6;
+
+type CardCol = { key: string; label?: React.ReactNode; format: Format };
+function FieldList({ fields, row }: { fields: CardCol[]; row: Row }) {
+  return (
+    <dl className="grid grid-cols-[minmax(0,0.9fr)_minmax(0,1.6fr)] gap-x-3 gap-y-1">
+      {fields.map((c) => (
+        <React.Fragment key={c.key}>
+          <dt className="min-w-0 break-words text-muted-foreground">{c.label ?? humanize(c.key)}</dt>
+          <dd className="min-w-0 break-words">{formatValue(row[c.key], c.format, row)}</dd>
+        </React.Fragment>
+      ))}
+    </dl>
+  );
+}
+
+/** A card's label: value pairs; past a few, the rest open from a native disclosure (works on touch and keys). */
+function CardFields({ fields, row }: { fields: CardCol[]; row: Row }) {
+  if (fields.length <= CARD_FIELDS + 1) return <FieldList fields={fields} row={row} />;
+  return (
+    <>
+      <FieldList fields={fields.slice(0, CARD_FIELDS)} row={row} />
+      <details className="group mt-1.5">
+        <summary data-key-stop="" className="relative inline-flex min-h-6 cursor-pointer items-center rounded text-primary outline-none select-none after:absolute after:-inset-x-2 after:-inset-y-1.5 focus-visible:focus-halo">
+          <span className="group-open:hidden">{`More (${fields.length - CARD_FIELDS})`}</span>
+          <span className="hidden group-open:inline">Fewer</span>
+        </summary>
+        <div className="mt-1.5">
+          <FieldList fields={fields.slice(CARD_FIELDS)} row={row} />
+        </div>
+      </details>
+    </>
   );
 }
 
@@ -251,12 +382,15 @@ function TableInner({ data, columns, sort, search, empty = "Nothing here yet.", 
   }
 
   const alignClass = (a: string) => (a === "right" ? "text-right" : a === "center" ? "text-center" : "text-left");
-  const asCards = cards === "always" || (cards === "auto" && phone && cols.length > 3);
-  // Named in any case, like columns; an unknown name falls back to the first column.
-  const titleCol = (cardTitle && cols.find((c) => c.key === cardTitle || c.key.toLowerCase() === cardTitle.toLowerCase())) || cols[0];
+  // A narrower table is cards on a phone too once it would overflow (long text in two columns still clips).
+  const wide = cols.length > 3;
+  const outer = React.useRef<HTMLDivElement>(null);
+  const overflowing = useOverflowCards(outer, cards === "auto" && phone && !wide);
+  const asCards = cards === "always" || (cards === "auto" && phone && (wide || overflowing));
+  const titleCol = pickTitleColumn(cols, rows, cardTitle);
 
   return (
-    <div className={cn("my-6", className)}>
+    <div ref={outer} className={cn("my-6", className)}>
       {asCards ? (
         <div className="mb-3 flex flex-wrap items-center gap-2">
           {search && <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Filter…" className="max-w-[12rem]" aria-label="Filter rows" />}
@@ -294,16 +428,7 @@ function TableInner({ data, columns, sort, search, empty = "Nothing here yet.", 
                 className="rounded-xl border border-border bg-card px-4 py-3 text-[14px] leading-snug shadow-card"
               >
                 {titleCol && <div className="mb-1.5 font-medium text-foreground">{formatValue(r[titleCol.key], titleCol.format, r)}</div>}
-                <dl className="grid grid-cols-[minmax(0,0.9fr)_minmax(0,1.6fr)] gap-x-3 gap-y-1">
-                  {cols.filter((c) => c !== titleCol).map((c) =>
-                    r[c.key] === null || r[c.key] === undefined || r[c.key] === "" ? null : (
-                      <React.Fragment key={c.key}>
-                        <dt className="min-w-0 break-words text-muted-foreground">{c.label ?? humanize(c.key)}</dt>
-                        <dd className="min-w-0 break-words">{formatValue(r[c.key], c.format, r)}</dd>
-                      </React.Fragment>
-                    ),
-                  )}
-                </dl>
+                <CardFields fields={cols.filter((c) => c !== titleCol && !isBlank(r[c.key]))} row={r} />
               </li>
             ))}
           </ul>

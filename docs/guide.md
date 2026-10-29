@@ -13,6 +13,8 @@ so they need no account.
   - `"change"`: explain a code change (a pull request or branch) to someone with no context.
   - `"shortlist"`: help someone choose between real options (clinics, products, plans): one `<Shortlist>` with prices dated and every caveat inside its option, not in page-long prose.
   - `"findings"`: an audit or review (performance, cost, CI, security, what to fix): one `<Findings>`; ship status lives in its data file (`artifact_patch_data`), never in a hand-written Callout or "Done" table.
+  - `"proposal"`: a plan or design someone must choose on before you build it: evidence, options and plan, with every ask a `Decision` on the page, and a `Log` of what happened once it's decided.
+  - `"tracker"`: a page scheduled runs keep up toward one goal (a search, a watch, an errand): status with an `AsOf`, what waits on the reader as Decisions, leads in a Table, a `Log` per run, one save per run.
 
 ## Files
 
@@ -48,6 +50,8 @@ so they need no account.
 ## Editing
 
 - **Change, don't recreate:** never create a new artifact to change an existing one.
+- **Leave it better:** when you update a page, move what you touch onto the kit's pieces: a "Last checked" line becomes `<AsOf>`, dated headings become a `<Log>`, an ask in prose becomes a `Decision`. Saves warn about these.
+- **One save per change:** gather a run's edits and save once (several files in one `artifact_write_files`, several data changes in one `artifact_patch_data`). Every save is a version, and only the last 50 are kept.
 - **Find before reading:** use `artifact_grep` or a ranged `artifact_read` to locate text (a read returns at most 400 lines or 40 KB; pass `startLine` for more).
 - **Lists come a page at a time:** long outputs say how to get the rest. `artifact_threads` returns 50 threads at a time (pass `offset`), `artifact_state` 100 keys (`limit` and `offset`, or a narrower `prefix`), `artifact_errors` 20 (`offset`), `artifact_list` 50 (`page`), `artifact_read` 400 lines (`startLine`), and `artifact_activity` continues from its `cursor`.
 - **Pick the edit tool:**
@@ -65,7 +69,7 @@ so they need no account.
 ## Feedback from readers
 
 - **Comments:** readers can comment on any text, block, table row or the whole page. Each thread records the block it points at (`block` ids follow the outline: a heading's slug, then `<section>-1`, `<section>-2` for the blocks under it), the quoted text and the version it was written on.
-- **Ask for what you need back:** when the user needs a decision or facts from people, put a `Decision` (one answer that stands, with `deciders` as literal emails when only some people choose), an `Approval` or a `Form` in the artifact instead of asking in prose or with a Poll nobody answers, and share it with those people with `edit` access. Their answers come back through `artifact_activity` and `artifact_state`, signed with their verified email and the version they saw, and the owner is notified. Only people make decisions and responses, on the page; you can read them but not set them. Everyone who can open the artifact sees every response, so don't collect anything private, especially on a public artifact.
+- **Ask for what you need back:** when the user needs a decision or facts from people, put a `Decision` (one answer that stands, with `deciders` as literal emails when only some people choose), an `Approval` or a `Form` in the artifact instead of asking in prose or with a Poll nobody answers, and share it with those people with `edit` access. Their answers come back through `artifact_activity` and `artifact_state`, signed with their verified email and the version they saw, and the owner is notified. Read an answer's `note` too: it can narrow or override the choice, and a question in it deserves a reply (`artifact_comment`). Keep answered Decisions on the page with the same id; removing one hides its answer. Only people make decisions and responses, on the page; you can read them but not set them. Everyone who can open the artifact sees every response, so don't collect anything private, especially on a public artifact.
 - **Pick up feedback:** call `artifact_activity` (all artifacts, or one `id`) to see new threads, replies, votes, checklist ticks and versions since your last cursor. `artifact_threads` lists an artifact's open threads with every comment.
 - **Act on it:** fix the artifact with the usual edit tools and pass `note` and `resolves` (the thread ids you addressed). The `note` is one line, e.g. "Split costs per seat", shown in history, in the "Updated since you last looked" bar and in update notifications; without one, readers see "edit index.mdx". Resolved threads show "Addressed in vN" and their authors are notified. Reply with `artifact_comment` when you need to answer a question or explain why you didn't change something. To anchor a new thread, prefer `quote` (exact page text) over a `block` id.
 - **Hearing back later:** you can't wait for answers in one session. When the user wants you to act on answers as they come in, suggest MCP events if their client supports them, or a scheduled run that calls `artifact_activity` with a saved cursor. Recipes: https://github.com/micthiesen/artifacts.boo/blob/main/docs/AUTOMATIONS.md. An event payload's `untrusted` names the fields people wrote (title, by, text or note). On each event:

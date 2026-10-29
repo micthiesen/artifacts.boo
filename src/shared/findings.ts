@@ -9,7 +9,7 @@ export type Confidence = "measured" | "estimated" | "guess";
 export type FindingStatus = "open" | "doing" | "shipped" | "skipped" | "decide";
 export type FindingLink = { label: string; url: string };
 /** The same row <Delta> shows: before and after, and which way is better. */
-export type FindingMetric = { label: string; before: number; after: number; unit?: string; better: "up" | "down"; note?: string };
+export type FindingMetric = { label: string; before: number; after: number; unit?: string; better: "up" | "down"; note?: string; expected?: boolean };
 
 export type Finding = {
   id: string;
@@ -24,7 +24,11 @@ export type Finding = {
   metrics?: FindingMetric[];
   owner?: string;
   link?: FindingLink;
+  /** The question put to the reader on the page, answered with <Decision> at `decide/finding-<id>`. */
+  decide?: { question?: string; options: string[]; recommended?: string };
 };
+/** A smaller win, kept out of the ranking and the chart. */
+export type MinorFinding = { title: string; change: string };
 
 export type FindingsMethod = { window?: string; sample?: string; setup?: string; head?: string; sources?: FindingLink[]; caveats?: string[] };
 
@@ -33,11 +37,12 @@ export type FindingsData = {
   answer: string;
   method: FindingsMethod;
   findings: Finding[];
+  minor?: MinorFinding[];
   notWorth?: { title: string; why: string }[];
   inventory?: { title: string; data: string; columns?: string; top?: number };
 };
 
-export const FINDINGS_LIMITS = { findings: 12, titleWords: 8, notWorth: 12 } as const;
+export const FINDINGS_LIMITS = { findings: 12, titleWords: 8, notWorth: 12, minor: 30, decideOptions: 5 } as const;
 
 export const IMPACTS: Impact[] = ["high", "medium", "low"];
 export const EFFORTS: Effort[] = ["small", "medium", "large"];
@@ -87,7 +92,7 @@ export function checkFindings(value: unknown, dataFiles?: Iterable<string>): str
   let measured = false;
   findings.forEach((f, i) => {
     const at = isObj(f) && isText(f.id) ? `finding "${f.id}"` : `finding ${i + 1}`;
-    if (!isObj(f)) return out.push(`${at} is {id, title, impact, effort, confidence, status?, change, benefit, validate?, metrics?, owner?, link?}`);
+    if (!isObj(f)) return out.push(`${at} is {id, title, impact, effort, confidence, status?, change, benefit, validate?, metrics?, owner?, link?, decide?}`);
     if (typeof f.id !== "string" || !FINDING_ID.test(f.id)) out.push(`${at}: "id" is 1-40 letters, digits, "-" or "_"`);
     else if (ids.has(f.id)) out.push(`${at}: the id is used twice; give each finding its own`);
     else ids.add(f.id);
@@ -106,6 +111,17 @@ export function checkFindings(value: unknown, dataFiles?: Iterable<string>): str
     if (!isOptText(f.validate)) out.push(`${at}: "validate" is text: how to tell it worked`);
     if (!isOptText(f.owner)) out.push(`${at}: "owner" is text`);
     if (f.link !== undefined && !isLink(f.link)) out.push(`${at}: "link" is {label, url} with an http(s) url`);
+    if (f.decide !== undefined) {
+      const d = f.decide;
+      const opts = isObj(d) && Array.isArray(d.options) ? d.options : [];
+      if (!isObj(d) || opts.length < 2 || opts.length > FINDINGS_LIMITS.decideOptions || !opts.every(isText)) {
+        out.push(`${at}: "decide" is {question?, options, recommended?} with 2 to ${FINDINGS_LIMITS.decideOptions} short options`);
+      } else {
+        if (!isOptText(d.question)) out.push(`${at}: "decide.question" is text`);
+        if (new Set(opts).size !== opts.length) out.push(`${at}: "decide.options" are each different`);
+        if (d.recommended !== undefined && !opts.includes(d.recommended)) out.push(`${at}: "decide.recommended" is one of "decide.options", word for word`);
+      }
+    }
     if (f.metrics !== undefined) {
       if (!Array.isArray(f.metrics) || !f.metrics.length) out.push(`${at}: "metrics" is a list of {label, before, after, unit?, better: "up"|"down"}`);
       else for (const r of f.metrics) {
@@ -116,6 +132,12 @@ export function checkFindings(value: unknown, dataFiles?: Iterable<string>): str
   });
   if (measured && isObj(m) && !isText(m.window) && !isText(m.sample)) {
     out.push(`a finding is "measured", so "method" says the "window" or "sample" it was measured over`);
+  }
+
+  if (g.minor !== undefined) {
+    const mi = Array.isArray(g.minor) ? g.minor : null;
+    if (!mi || !mi.every((n) => isObj(n) && isText(n.title) && isText(n.change))) out.push(`"minor" is a list of {title, change}: smaller wins outside the ranking`);
+    else if (mi.length > FINDINGS_LIMITS.minor) out.push(`"minor" has at most ${FINDINGS_LIMITS.minor} items; drop the ones nobody would miss`);
   }
 
   if (g.notWorth !== undefined) {
@@ -148,6 +170,7 @@ export function metricProblem(r: unknown): string | null {
   if (r.better !== "up" && r.better !== "down") return `${at}: "better" is "up" or "down"`;
   if (r.unit !== undefined && typeof r.unit !== "string") return `${at}: "unit" is text like "ms" or "%"`;
   if (r.note !== undefined && typeof r.note !== "string") return `${at}: "note" is text`;
+  if (r.expected !== undefined && typeof r.expected !== "boolean") return `${at}: "expected" is true or false`;
   return null;
 }
 
