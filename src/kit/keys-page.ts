@@ -15,8 +15,8 @@ import { besideIndex, nextInColumn, type Box } from "./keys-geometry.ts";
 import { keysMode, keysRoot, note, sendKey as send, setKeysMode, showcmd } from "./keys.ts";
 
 /** What counts as a block. The innermost one is the cursor's stop; the atomic ones are stops whole. */
-const BLOCKS = "h1,h2,h3,h4,h5,h6,p,li,pre,table,blockquote,figure,dt,dd,[data-speak],[role=note],[data-b]";
-const ATOMIC = "pre,table,figure,blockquote,[data-speak],[role=note]";
+const BLOCKS = "h1,h2,h3,h4,h5,h6,p,li,pre,table,blockquote,figure,dt,dd,summary,[data-speak],[role=note],[data-b]";
+const ATOMIC = "pre,table,figure,blockquote,summary,[data-speak],[role=note]";
 const SKIP = "nav,[hidden],[aria-hidden='true'],[data-speak='skip'],.art-contents,.art-markers,.art-keys-find,.art-showcmd,.art-landing,template";
 const CONTROLS = "a[href],button,input,select,textarea,summary,[tabindex]:not([tabindex='-1']),[role=button],[role=checkbox],[role=switch],[role=tab]";
 const MAX_QUOTE = 1000;
@@ -118,7 +118,9 @@ export function escape() {
 /** The page's blocks in reading order: innermost ones, atomic ones whole, nothing hidden or of ours. */
 function blocks(): Element[] {
   const root = keysRoot();
-  const found = [...root.querySelectorAll(BLOCKS)].filter((el) => !el.closest(SKIP) && !el.parentElement?.closest(ATOMIC));
+  // Only what can be seen: the inside of a closed <details> (a folded finding, an accordion) still has boxes in
+  // some browsers, and a stop there would be an invisible cursor. Its summary, the part that shows, is a stop.
+  const found = [...root.querySelectorAll(BLOCKS)].filter((el) => !el.closest(SKIP) && !el.parentElement?.closest(ATOMIC) && !folded(el));
   const containers = new Set<Element>();
   for (const el of found) for (let up = el.parentElement; up && up !== root; up = up.parentElement) containers.add(up);
   return found.filter((el) => {
@@ -126,6 +128,15 @@ function blocks(): Element[] {
     const r = el.getBoundingClientRect();
     return r.height > 0 && r.width > 0;
   });
+}
+
+/** Inside a closed <details> other than its summary, or hidden some other way the browser knows about. */
+function folded(el: Element): boolean {
+  for (let d = el.closest("details:not([open])"); d; d = d.parentElement?.closest("details:not([open])") ?? null) {
+    const summary = d.querySelector(":scope > summary");
+    if (!summary?.contains(el)) return true;
+  }
+  return (el as Element & { checkVisibility?: () => boolean }).checkVisibility?.() === false;
 }
 
 /** Where the cursor is in the list; with none (or one that re-rendered away), the first block on screen. */
@@ -446,6 +457,8 @@ function open() {
   if (here) return send({ t: "comment:open", thread: here.id });
   const control = cursor.matches(CONTROLS) ? cursor : (cursor.querySelector(CONTROLS) ?? cursor.closest("a[href]"));
   if (!(control instanceof HTMLElement)) return note("Nothing to open here");
+  // A folded section's summary opens or closes it; the cursor stays on it, and j goes into what it showed.
+  if (control.tagName === "SUMMARY") return control.click();
   control.focus();
   opened = control;
 }
