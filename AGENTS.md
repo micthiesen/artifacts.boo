@@ -12,6 +12,8 @@ sideways on a phone.
 
 Michael's own nits about the product (screenshots and notes tagged
 "Artifacts Nits" in Karakeep) are worked by `$nits`.
+`$audit` reviews the artifacts written since the last audit and improves
+the guide, recipes, kit and save checks from what it finds.
 
 ## Cost
 
