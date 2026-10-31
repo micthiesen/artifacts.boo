@@ -195,3 +195,27 @@ test("section ids are kebab slugs of their headings", () => {
   expect(slug("After it ships")).toBe("after-it-ships");
   expect(slug("Only you can judge")).toBe("only-you-can-judge");
 });
+
+test("a step's values on the map and notes on its diff are checked against the map and the lines", () => {
+  const nodes = new Set(["S", "H", "V", "C"]);
+  const stops = (patch: object[]) => example.stops.map((s: object, i: number) => ({ ...s, ...patch[i] }));
+  const check = (patch: object[]) => checkChangeGuide({ ...example, stops: stops(patch) }, nodes).join("\n");
+  const good = [
+    { focus: "H", state: { "H.lag": "1 frame" } },
+    { state: { "H.lag": "none", "C.owner": "browser" } },
+  ];
+  expect(check(good)).toBe("");
+  expect(mapSteps(stops(good)).steps.map((s) => s.state)).toEqual([{ "H.lag": "1 frame" }, { "H.lag": "none", "C.owner": "browser" }]);
+  expect(check([{ focus: "H" }, { state: { "Z.lag": "0" } }])).toContain(`step 2's state key "Z.lag" names "Z", which isn't a node in "map"`);
+  expect(check([{ state: { "H.lag": "1" } }, {}])).toContain(`step 1 has a "state" but no "focus"`);
+  // One focused step shows the map whole, with no bar to list values in.
+  expect(checkChangeGuide({ ...example, stops: [{ ...example.stops[0], focus: "H", state: { "H.lag": "1" } }, { ...example.stops[1], focus: undefined }] }, nodes).join()).toContain(
+    'give two or more steps a "focus"',
+  );
+
+  const diff = { file: "src/kit/kit.css", lines: "-  position: fixed;\n+  position: absolute;" };
+  expect(check([{ diff: { ...diff, notes: [{ at: "L2", text: "Scrolls with the page." }, { at: "position", text: "x" }] } }, {}])).toBe("");
+  const bad = check([{ diff: { ...diff, notes: [{ at: "L3", text: "x" }, { at: "fixedd", text: "x" }] } }, {}]);
+  expect(bad).toContain("step 1's diff note 1 points at L3, but the diff has lines L1 to L2");
+  expect(bad).toContain(`step 1's diff note 2 is about "fixedd", which isn't in the diff's lines`);
+});

@@ -38,7 +38,17 @@
    ],
    "diff": {
     "file": "src/kit/kit.css",
-    "lines": "-  position: fixed;\n-  inset: 0;\n+  position: absolute;\n+  top: 0;\n+  left: 0;\n   z-index: 30;\n-  width: 100%;\n-  height: 100%;"
+    "lines": "-  position: fixed;\n-  inset: 0;\n+  position: absolute;\n+  top: 0;\n+  left: 0;\n   z-index: 30;\n-  width: 100%;\n-  height: 100%;",
+    "notes": [
+     {
+      "at": "L3-L5",
+      "text": "Placed on the page, so it scrolls with the text."
+     },
+     {
+      "at": "z-index",
+      "text": "Unchanged: it still sits above the page."
+     }
+    ]
    }
   },
   {
@@ -48,7 +58,11 @@
     "src/shared/wisp-body.ts",
     "test/motion.test.ts"
    ],
-   "focus": "M F C"
+   "focus": "M F C",
+   "state": {
+    "C.size": "wisp-sized",
+    "H.redraws": "every scroll"
+   }
   },
   {
    "title": "Scrolling no longer waits for the script",
@@ -57,7 +71,10 @@
     "src/kit/wisp.ts",
     "src/shell/splash-wisp.ts"
    ],
-   "focus": "S H C"
+   "focus": "S H C",
+   "state": {
+    "H.redraws": "none"
+   }
   }
  ],
  "proof": [

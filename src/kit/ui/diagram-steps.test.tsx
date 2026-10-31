@@ -199,3 +199,91 @@ test("Listen reads the step's words and skips the controls", async () => {
   expect(read).toEqual(["It starts", "The page asks."]);
   expect(sent).toEqual([]);
 });
+
+// ---- values a step sets --------------------------------------------------------------------
+
+const { stateAt, stateProblems } = await import("../../shared/diagram-steps.ts");
+
+const held: import("../../shared/diagram-steps.ts").DiagramStep[] = [
+  { focus: "A", text: "Starts.", state: { "A.count": "0", "B.cookie": "none" } },
+  { focus: "B", text: "Nothing set." },
+  { focus: "A", text: "Counts.", state: { "A.count": "1", "B.cookie": "none" } },
+  { focus: "B", text: "Signs in.", state: { "B.cookie": "sid=1", "B.user": "alice" } },
+];
+
+test("values carry from step to step; a step's change keeps what it was, and a first value is new", () => {
+  expect(stateAt(held, 0)).toEqual([
+    { node: "A", name: "count", value: "0", added: true },
+    { node: "B", name: "cookie", value: "none", added: true },
+  ]);
+  // A step that sets nothing still shows the values so far, none of them changed.
+  expect(stateAt(held, 1)).toEqual([
+    { node: "A", name: "count", value: "0" },
+    { node: "B", name: "cookie", value: "none" },
+  ]);
+  // Setting a value to what it already was isn't a change.
+  expect(stateAt(held, 2)).toEqual([
+    { node: "A", name: "count", value: "1", was: "0" },
+    { node: "B", name: "cookie", value: "none" },
+  ]);
+  expect(stateAt(held, 3)).toEqual([
+    { node: "A", name: "count", value: "1" },
+    { node: "B", name: "cookie", value: "sid=1", was: "none" },
+    { node: "B", name: "user", value: "alice", added: true },
+  ]);
+  expect(stateAt([{}], 0)).toBeNull();
+});
+
+test("a value is keyed by a node the diagram has, and is short text", () => {
+  const known = new Set(["A", "B"]);
+  expect(stateProblems(held, known)).toEqual([]);
+  const bad = stateProblems(
+    [
+      { state: { "C.count": "1" } },
+      { state: { count: "1", "A.x": "", "A.y": "x".repeat(41) } },
+      { state: ["A.count"] as unknown as Record<string, string> },
+    ],
+    known,
+  ).join("\n");
+  expect(bad).toContain(`step 1's state key "C.count" names "C", which isn't a node in the diagram`);
+  expect(bad).toContain(`step 2's state key "count" is "Node.name"`);
+  expect(bad).toContain(`step 2's state "A.x" is a short text value`);
+  expect(bad).toContain("keep values to 40");
+  expect(bad).toContain(`step 3's "state" is {"Node.name": "value"}`);
+  // Without the diagram's ids only the shape is checked.
+  expect(stateProblems([{ state: { "C.count": "1" } }])).toEqual([]);
+  const many = Object.fromEntries(Array.from({ length: 13 }, (_, i) => [`A.v${i}`, "1"]));
+  expect(stateProblems([{ state: many }], known).join()).toContain("show at most 12");
+});
+
+function HeldHarness() {
+  const [state, setState] = React.useState<StepState>({ at: 0, all: false });
+  return <StepBar steps={held} state={state} onState={setState} />;
+}
+
+test("the bar lists the values at each step, striking through what a step changed", async () => {
+  await act(async () => root.render(<HeldHarness />));
+  const list = () => container.querySelector("[role=group][aria-label^=Values]")!;
+  const said = () => container.querySelector("[aria-live] .sr-only")?.textContent ?? "";
+  expect(list().getAttribute("aria-label")).toBe("Values at this step");
+  expect(said()).toBe("A.count is 0; B.cookie is none");
+  expect(list().textContent).toContain("A.countnew: 0new");
+  await act(async () => button("Next").click());
+  expect(list().textContent).not.toContain("new");
+  await act(async () => button("Next").click());
+  expect(list().querySelector("s")?.textContent).toBe("was 0");
+  // Moving on announces what changed, not the whole list.
+  expect(said()).toBe("A.count was 0, now 1");
+  expect(list().textContent).toContain("now 1");
+  // All shows where the values end, with nothing struck through.
+  await act(async () => button("All").click());
+  expect(list().getAttribute("aria-label")).toBe("Values at the end");
+  expect(list().querySelector("s")).toBeNull();
+  expect(list().textContent).toContain("B.useralice");
+});
+
+test("the render check reads a diagram's ids for the values too", () => {
+  const known = knownIds(document.createElement("div"), "flowchart LR\n  A --> B");
+  expect(stateProblems([{ state: { "Z.x": "1" } }], known)).toHaveLength(1);
+  expect(stateProblems(held, known)).toEqual([]);
+});

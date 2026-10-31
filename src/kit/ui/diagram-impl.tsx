@@ -5,7 +5,7 @@ import * as React from "react";
 import ChevronLeft from "lucide-react/dist/esm/icons/chevron-left.mjs";
 import ChevronRight from "lucide-react/dist/esm/icons/chevron-right.mjs";
 import { mountAsync, parse, type Mounted } from "pele/lazy";
-import { canMove, focusIds, stepTo, unknownFocus, type DiagramStep, type StepMove, type StepState } from "../../shared/diagram-steps.ts";
+import { canMove, focusIds, stateAt, stateProblems, stepTo, unknownFocus, type DiagramStep, type StateRow, type StepMove, type StepState } from "../../shared/diagram-steps.ts";
 import { post } from "../store.ts";
 import type { DiagramShow } from "./diagram.tsx";
 import { Callout } from "./layout.tsx";
@@ -71,7 +71,10 @@ export default function DiagramImpl({ code, show = "both", focus, steps }: ImplP
         if (!m.result && m.error) return fail(m.error);
         decorate(el, code, litRef.current);
         // A step lighting a node the diagram doesn't have would dim everything: the render check refuses it.
-        const bad = stepsRef.current ? unknownFocus(stepsRef.current, knownIds(el, code)) : [];
+        // So is a value on one; the bar would list it under a name the picture doesn't show.
+        const steps = stepsRef.current;
+        const known = steps ? knownIds(el, code) : null;
+        const bad = steps && known ? [...unknownFocus(steps, known), ...stateProblems(steps, known)] : [];
         if (bad.length) post({ t: "error", message: `Diagram: ${bad.join("; ")}` });
       },
       fail,
@@ -115,6 +118,12 @@ export default function DiagramImpl({ code, show = "both", focus, steps }: ImplP
 export function StepBar({ steps, state, onState }: { steps: readonly DiagramStep[]; state: StepState; onState: (s: StepState) => void }) {
   const count = steps.length;
   const step = steps[Math.min(state.at, count - 1)]!;
+  const rows = React.useMemo(() => stateAt(steps, state.all ? count - 1 : Math.min(state.at, count - 1)), [steps, state, count]);
+  // The live region says what this step changed, so moving on announces it; the list below is there to browse.
+  const changes = rows
+    ?.filter((r) => r.was !== undefined || r.added)
+    .map((r) => `${r.node}.${r.name} ${r.was !== undefined ? `was ${r.was}, now` : "is"} ${r.value}`)
+    .join("; ");
   const move = (m: StepMove) => onState(stepTo(state, m, count));
   const KEYS: Record<string, StepMove> = { ArrowLeft: "prev", ArrowRight: "next", Home: "first", End: "last" };
   const onKeyDown = (e: React.KeyboardEvent) => {
@@ -160,9 +169,58 @@ export function StepBar({ steps, state, onState }: { steps: readonly DiagramStep
           <>
             {step.title && <p className="text-sm font-medium text-pretty">{step.title}</p>}
             <p className="text-sm text-pretty">{step.text}</p>
+            {changes && (
+              <p className="sr-only" data-speak="skip">
+                {changes}
+              </p>
+            )}
           </>
         )}
       </div>
+      {rows && <StateList rows={rows} all={state.all} />}
+    </div>
+  );
+}
+
+/**
+ * What the parts hold as of this step, one ruled row per value. A value this step changed shows what it was,
+ * struck through, before the new one; a value it first set says "new". Under "All", the values at the end.
+ * Changing step swaps the words, as the step's text does.
+ */
+function StateList({ rows, all }: { rows: StateRow[]; all: boolean }) {
+  return (
+    <div role="group" aria-label={all ? "Values at the end" : "Values at this step"} data-speak="skip" className="mt-3">
+    <dl className="divide-y divide-border rounded-lg border border-border text-[13px]">
+      {rows.map((r) => {
+        const changed = !all && (r.was !== undefined || r.added);
+        return (
+          <div key={`${r.node}.${r.name}`} className="flex flex-wrap items-baseline justify-between gap-x-3 px-3 py-1.5">
+            <dt className={cn("min-w-0 font-mono break-all", changed ? "text-foreground" : "text-muted-foreground")}>
+              {r.node}.{r.name}
+            </dt>
+            <dd className="flex min-w-0 flex-wrap items-baseline gap-x-1.5 font-mono tabular-nums break-all">
+              {!all && r.was !== undefined && (
+                <>
+                  <s className="text-muted-foreground">
+                    <span className="sr-only">was </span>
+                    {r.was}
+                  </s>
+                  <span aria-hidden="true" className="text-muted-foreground">→</span>
+                  <span className="sr-only">now </span>
+                </>
+              )}
+              {!all && r.added && <span className="sr-only">new: </span>}
+              <span className={changed ? "font-medium text-foreground" : "text-muted-foreground"}>{r.value}</span>
+              {!all && r.added && (
+                <span aria-hidden="true" className="font-sans text-[12px] text-muted-foreground">
+                  new
+                </span>
+              )}
+            </dd>
+          </div>
+        );
+      })}
+    </dl>
     </div>
   );
 }

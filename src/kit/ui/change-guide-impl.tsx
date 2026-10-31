@@ -18,7 +18,7 @@ import {
   type GuideProof,
   type GuideShot,
 } from "../../shared/change-guide.ts";
-import { canMove, stepTo, type StepState } from "../../shared/diagram-steps.ts";
+import { canMove, stepTo, type DiagramStep, type StepState } from "../../shared/diagram-steps.ts";
 import { useData } from "../hooks.ts";
 import { useKeyWidget } from "../key-widget.ts";
 import { Decision } from "./decision.tsx";
@@ -200,7 +200,7 @@ export default function ChangeGuideImpl({ data: path }: { data: string }) {
                 </p>
                 {s.diff && (
                   <div data-key-stop="">
-                    <Diff file={s.diff.file} code={s.diff.lines} className="my-3" />
+                    <Diff file={s.diff.file} code={s.diff.lines} notes={s.diff.notes} className="my-3" />
                   </div>
                 )}
                 {stepOf.has(i) && (
@@ -313,7 +313,7 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
 
 // ---- The map ---------------------------------------------------------------------------------------------------
 
-type MapProps = { code: string; steps: { focus: string; title: string; text: string }[]; state: StepState; onState: (s: StepState) => void };
+type MapProps = { code: string; steps: DiagramStep[]; state: StepState; onState: (s: StepState) => void };
 
 /**
  * The guide's one picture, walked through stop by stop. <Diagram steps> keeps its step to itself, so this

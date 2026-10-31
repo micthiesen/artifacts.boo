@@ -137,11 +137,23 @@ or an optional field is malformed (the reason says how to fix it).
   - `files`: the files this step changes.
   - `diff` (optional): at most 15 lines from `git diff`, only when the lines
     read as plain English, like CSS or config; not regexes or dense logic.
+    When one line or name in it carries the step, add `notes`:
+    `[{"at": "L3", "text": "…"}]`, where `at` is `"L3"`, `"L3-L5"` (counting
+    the diff's lines from 1) or a name such as `"validateInput"`. One sentence
+    each, at most 6; a note on a line or name the diff doesn't have is
+    refused.
   - `focus` (optional): the `map` node ids this step is about; it should
     light fewer than half of them, or the step adds nothing. The map is drawn
     once: steps with a `focus` become its walk-through, and each gets an "On
     the map" button that lights its part. It takes two or more steps with a
     `focus` to make a walk-through; with one, the map just shows whole.
+  - `state` (optional, with a `focus`): values the map's parts hold once
+    this step has happened, as `{"Auth.attempts": "1"}` (a node id, a dot, a
+    name). The walk-through lists them under each step, striking through
+    what the step changed, so a change in what's stored (a cache becoming a
+    table, a counter, a flag) reads step by step. Set a value in the first
+    step that has it and again only when it changes; keep values to 40
+    characters and 12 in all.
   - Big steps are fine: files are grouped by folder, folded past 8, and a
     file mirrored under two roots (`src/x/y.ts` and `web/src/x/y.ts`) shows
     once with "×2".

@@ -3,9 +3,20 @@
 // at a missing step or lights a node its picture doesn't have is refused with a reason, not shown wrong.
 // Everything added after the first version is optional, so guides written before it keep saving and showing.
 
+import { stateProblems, type DiagramStep } from "./diagram-steps.ts";
+import { placeNotes, type DiffNote } from "./diff-notes.ts";
+
 /** A file, or a whole folder (`"supabase/functions/"`, ending in "/") with how many files under it changed. */
 export type GuideFile = { path: string; add?: number; del?: number; files?: number };
-export type GuideStop = { title: string; why: string; files: string[]; focus?: string; diff?: { file?: string; lines: string } };
+export type GuideStop = {
+  title: string;
+  why: string;
+  files: string[];
+  focus?: string;
+  /** Values the map's nodes hold once this step has happened ("Auth.attempts": "1"); needs a `focus`. */
+  state?: Record<string, string>;
+  diff?: { file?: string; lines: string; notes?: DiffNote[] };
+};
 export type GuideProof = {
   check: string;
   ran: boolean;
@@ -166,7 +177,7 @@ export function checkChangeGuide(value: unknown, nodes?: Set<string>): string[] 
   stops.forEach((s, i) => {
     const at = `step ${i + 1}`;
     if (!isObj(s) || !isText(s.title) || !isText(s.why) || !Array.isArray(s.files)) {
-      out.push(`${at} is {title, why, files, focus?, diff?}`);
+      out.push(`${at} is {title, why, files, focus?, state?, diff?}`);
       return;
     }
     const words = (s.title as string).trim().split(/\s+/).length;
@@ -180,17 +191,27 @@ export function checkChangeGuide(value: unknown, nodes?: Set<string>): string[] 
       else if (!isText(g.map) && s.focus.trim()) out.push(`${at} has a "focus" but the guide has no "map" to light`);
       else if (nodes) for (const id of s.focus.split(/\s+/).filter(Boolean)) if (!nodes.has(id)) out.push(`${at}'s focus "${id}" isn't a node in "map"`);
     }
+    if (s.state !== undefined) {
+      if (!(typeof s.focus === "string" && s.focus.trim())) out.push(`${at} has a "state" but no "focus": values show as the map walks through the steps with a focus`);
+    }
     if (s.diff !== undefined) {
       const d = s.diff;
-      if (!isObj(d) || !isText(d.lines)) out.push(`${at}'s "diff" is {file?, lines}`);
+      if (!isObj(d) || !isText(d.lines)) out.push(`${at}'s "diff" is {file?, lines, notes?}`);
       else {
         const lines = (d.lines as string).replace(/\n$/, "").split("\n");
         if (lines.length > GUIDE_LIMITS.diffLines) out.push(`${at}'s diff has ${lines.length} lines; show at most ${GUIDE_LIMITS.diffLines}`);
         if (lines.some((l) => l.length && !"+- ".includes(l[0]))) out.push(`${at}'s diff lines each start with "+", "-" or a space, as \`git diff\` prints them`);
         if (d.file !== undefined && (typeof d.file !== "string" || !paths.has(d.file))) out.push(`${at}'s diff file "${String(d.file)}" isn't in "files"`);
+        for (const p of placeNotes(lines, d.notes).problems) out.push(`${at}'s diff ${p}`);
       }
     }
   });
+
+  if (stops.some((s) => isObj(s) && s.state !== undefined)) {
+    // Fewer than two focused steps show the map whole, with no bar to list the values in.
+    if (stops.filter((s) => isObj(s) && typeof s.focus === "string" && s.focus.trim()).length < 2) out.push(`"state" shows as the map walks through its steps: give two or more steps a "focus"`);
+    out.push(...stateProblems(stops.map((s) => (isObj(s) ? (s as { state?: Record<string, string> }) : {})), nodes, `"map"`));
+  }
 
   const also = Array.isArray(g.alsoTouched) ? g.alsoTouched : [];
   if (g.alsoTouched !== undefined && !Array.isArray(g.alsoTouched)) out.push(`"alsoTouched" is a list of paths`);
@@ -392,15 +413,15 @@ export function superseded(proof: GuideProof[], head: string): Set<number> {
  * The guide's stepped map: one step per stop that has a `focus`, and which step each such stop is. One step is
  * no walk-through ("All 1 steps"), so a guide with fewer than two shows its map whole.
  */
-export function mapSteps(stops: GuideStop[]): { steps: { focus: string; title: string; text: string }[]; stepOf: Map<number, number> } {
-  const steps: { focus: string; title: string; text: string }[] = [];
+export function mapSteps(stops: GuideStop[]): { steps: DiagramStep[]; stepOf: Map<number, number> } {
+  const steps: DiagramStep[] = [];
   const stepOf = new Map<number, number>();
   if (stops.filter((s) => s.focus?.trim()).length < 2) return { steps, stepOf };
   stops.forEach((s, i) => {
     if (!s.focus?.trim()) return;
     stepOf.set(i, steps.length);
     // The bar counts map steps; the title carries the stop's own number so the two lists line up.
-    steps.push({ focus: s.focus, title: `${i + 1}. ${s.title}`, text: s.why });
+    steps.push({ focus: s.focus, title: `${i + 1}. ${s.title}`, text: s.why, ...(s.state && { state: s.state }) });
   });
   return { steps, stepOf };
 }
