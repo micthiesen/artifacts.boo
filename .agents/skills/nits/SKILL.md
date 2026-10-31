@@ -5,6 +5,7 @@ description: >-
   tagged "Artifacts Nits" in Karakeep): reads them, fixes them autopilot-style,
   and deletes each one from Karakeep once it is handled. User-initiated only
   via $nits.
+disable-model-invocation: true
 ---
 
 # Nits

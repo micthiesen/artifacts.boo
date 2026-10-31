@@ -8,6 +8,7 @@ description: >-
   of artifacts come out better next time. Commits and pushes, recording the
   audit so the next one starts where this one ended. User-initiated via $audit.
 argument-hint: "[since <date>] [focus, e.g. change guides]"
+disable-model-invocation: true
 ---
 
 # Audit

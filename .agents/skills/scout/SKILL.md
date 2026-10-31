@@ -6,6 +6,7 @@ description: >-
   adopt, borrow the idea, watch, or skip, with the evidence. Use when he pastes
   a URL and asks whether it's useful for this project. User-initiated via $scout.
 argument-hint: <url> [what caught your eye]
+disable-model-invocation: true
 ---
 
 # Scout
