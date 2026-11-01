@@ -12,6 +12,7 @@ import kitThemeCss from "../kit/theme.css";
 import type { JsonValue } from "../shared/protocol.ts";
 import kitExports from "./kit-exports.json";
 import { remarkBlockIds, type BlockInfo } from "./blocks.ts";
+import { logoErrors, logoHints } from "./logos.ts";
 import { checkMermaid, mermaidNodeIds, mermaidWidth, remarkMermaid, type MermaidBlock } from "./mermaid.ts";
 import { checkChangeGuide, mapKind } from "../shared/change-guide.ts";
 import { checkSources } from "../shared/sources.ts";
@@ -359,6 +360,7 @@ export async function buildArtifact(files: Record<string, string>): Promise<{ bu
   errors.push(...(await changeGuideErrors(files, data)));
   errors.push(...shortlistErrors(files, data));
   errors.push(...decisionErrors(files));
+  errors.push(...logoErrors(files));
   errors.push(...(await findingsErrors(files, data)));
   const sources = sourcesErrors(files, data);
   errors.push(...sources.errors);
@@ -371,7 +373,7 @@ export async function buildArtifact(files: Record<string, string>): Promise<{ bu
     return { errors: [{ path: "", message: `stylesheet: ${(err as Error).message}` }] };
   }
   const code = Object.fromEntries(paths.filter((p) => !p.startsWith("data/")).map((p) => [p, files[p]]));
-  const warnings = [...phoneWidthWarnings(candidates, code), ...dataWarnings(code, data), ...sources.warnings];
+  const warnings = [...phoneWidthWarnings(candidates, code), ...dataWarnings(code, data), ...sources.warnings, ...logoHints(code)];
   return { build: { entry: ART_PREFIX + entries[0], imports, css, data, blocks, stamp: BUILD_STAMP }, errors: [], ...(warnings.length ? { warnings } : {}) };
 }
 

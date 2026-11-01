@@ -27,6 +27,13 @@ No code from React Bits or Aceternity UI is used.
 | tailwind-merge | MIT, Copyright (c) Dany Castillo |
 | tailwindcss (compiled CSS, preflight) | MIT, Copyright (c) Tailwind Labs, Inc. |
 
+## Diagram logos
+
+- **SVG Logos** by Gil Barbara (https://github.com/gilbarbara/logos), via
+  @iconify-json/logos. CC0 1.0. Served at `/kit/v1/logos/`, one file per
+  name, and drawn only in diagrams that name them. The marks are trademarks
+  of their owners; showing one in a diagram implies no endorsement.
+
 ## Fonts
 
 - **Inter Variable** by Rasmus Andersson, via @fontsource-variable/inter.

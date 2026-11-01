@@ -5,12 +5,35 @@ import * as React from "react";
 import ChevronLeft from "lucide-react/dist/esm/icons/chevron-left.mjs";
 import ChevronRight from "lucide-react/dist/esm/icons/chevron-right.mjs";
 import { mountAsync, parse, type Mounted } from "pele/lazy";
+import { LOGO_NAME, logoRefs } from "../../shared/logos.ts";
 import { canMove, focusIds, stateAt, stateProblems, stepTo, unknownFocus, type DiagramStep, type StateRow, type StepMove, type StepState } from "../../shared/diagram-steps.ts";
 import { post } from "../store.ts";
 import type { DiagramShow } from "./diagram.tsx";
 import { Callout } from "./layout.tsx";
 import { Button } from "./primitives.tsx";
 import { cn } from "./utils.ts";
+
+/** The logo modules' directory under /kit/v1/logos/, named by scripts/build-kit.ts. */
+declare const __LOGOS_DIR__: string;
+
+/**
+ * The logos a diagram names, as Pele icon markup. Each is a module beside the kit (scripts/build-kit.ts):
+ * the frame may import scripts from the kit but fetch nothing. The save already refused unknown names.
+ */
+async function loadLogos(code: string): Promise<Map<string, string>> {
+  const names = logoRefs(code);
+  const svgs = await Promise.all(
+    names.map(async (name) => {
+      if (!LOGO_NAME.test(name)) throw new Error(`no logo named logos:${name}`);
+      try {
+        return ((await import(/* @vite-ignore */ new URL(`../logos/${__LOGOS_DIR__}/${name}.js`, import.meta.url).href)) as { default: string }).default;
+      } catch (err) {
+        throw new Error(`couldn't load logos:${name} (${describe(err)})`);
+      }
+    }),
+  );
+  return new Map(names.map((name, i) => [`logos:${name}`, svgs[i]]));
+}
 
 const MARKS = ["added", "changed", "removed"] as const;
 type Mark = (typeof MARKS)[number];
@@ -52,7 +75,8 @@ export default function DiagramImpl({ code, show = "both", focus, steps }: ImplP
     setError(null);
     // In the reading column (about 670 px), wide left-to-right diagrams may
     // stack vertically instead of shrinking to unreadable text.
-    mountAsync(el, code, {
+    loadLogos(code).then((logos) => cancelled ? undefined : mountAsync(el, code, {
+      icons: (name) => logos.get(name),
       links: false,
       images: false,
       directionBreakpoint: 720,
@@ -64,8 +88,9 @@ export default function DiagramImpl({ code, show = "both", focus, steps }: ImplP
       onError: fail,
       // Pele renders again when the width crosses the breakpoint, so marks are drawn on every render.
       onRender: () => decorate(el, code, litRef.current),
-    }).then(
+    })).then(
       (m) => {
+        if (!m) return;
         if (cancelled) return m.destroy();
         mounted = m;
         if (!m.result && m.error) return fail(m.error);

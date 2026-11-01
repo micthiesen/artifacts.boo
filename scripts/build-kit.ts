@@ -5,11 +5,14 @@
 //   dist/kit/kit/v1/chunks/*.js  shared code-split chunks (one React instance)
 //   dist/kit/kit/v1/kit.css      Tailwind v4 (preflight, theme, kit classes) + @font-face
 //   dist/kit/kit/v1/fonts/*      Inter Variable and Fraunces Variable (self-hosted)
+//   dist/kit/kit/v1/logos/<v>/*  one module per diagram logo name (src/shared/logos.ts)
 import { build } from "esbuild";
 import { createRequire } from "node:module";
 import { copyFile, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
+import { createHash } from "node:crypto";
 import { gzipSync } from "node:zlib";
+import { logoSvg, type LogoTreatment } from "../src/shared/logos.ts";
 
 const ROOT = resolve(import.meta.dir, "..");
 const OUT_ROOT = join(ROOT, "dist/kit");
@@ -46,7 +49,7 @@ async function generateEntries() {
   for (const [name, src] of Object.entries(files)) await writeFile(join(GEN, name), src + "\n");
 }
 
-async function buildJs() {
+async function buildJs(logosDir: string) {
   const result = await build({
     metafile: true,
     entryPoints: {
@@ -73,7 +76,7 @@ async function buildJs() {
     jsxImportSource: "react",
     chunkNames: "chunks/[name]-[hash]",
     entryNames: "[name]",
-    define: { "process.env.NODE_ENV": '"production"' },
+    define: { "process.env.NODE_ENV": '"production"', __LOGOS_DIR__: JSON.stringify(logosDir) },
     legalComments: "external",
     logLevel: "warning",
   });
@@ -111,6 +114,29 @@ async function buildCss(fontCss: string) {
   await writeFile(join(OUT, "kit.css"), fonts + "\n" + tw);
 }
 
+/**
+ * One module per logo name, so a diagram fetches only the logos it names (the frame can import
+ * scripts from the kit but fetch nothing). The directory is named for a digest of what's in it,
+ * since /kit/v1/* is cached as immutable; the diagram chunk gets the name as __LOGOS_DIR__.
+ */
+async function buildLogos(): Promise<string> {
+  const table: { logos: Record<string, string> } = JSON.parse(await readFile(join(ROOT, "src/shared/logos.json"), "utf8"));
+  const pack = JSON.parse(await readFile(require.resolve("@iconify-json/logos/icons.json"), "utf8"));
+  const modules = Object.entries(table.logos).map(([name, t]): [string, string] => [
+    name,
+    t.startsWith("=")
+      ? `export{default}from"./${t.slice(1)}.js";\n`
+      : `export default ${JSON.stringify(logoSvg(name, pack.icons[name], pack.width ?? 256, t as LogoTreatment))};\n`,
+  ]);
+  const hash = createHash("sha256");
+  for (const [name, code] of modules) hash.update(name).update("\0").update(code);
+  const digest = hash.digest("hex").slice(0, 12);
+  const dir = join(OUT, "logos", digest);
+  await mkdir(dir, { recursive: true });
+  await Promise.all(modules.map(([name, code]) => writeFile(join(dir, `${name}.js`), code)));
+  return digest;
+}
+
 async function writeHeaders() {
   await writeFile(
     join(OUT_ROOT, "_headers"),
@@ -142,11 +168,14 @@ async function walk(dir: string): Promise<string[]> {
 
 async function report() {
   const rows: [string, number, number][] = [];
+  const logos: [string, number, number] = ["kit/v1/logos/* (each loaded only by a diagram naming it)", 0, 0];
   for (const f of await walk(OUT_ROOT)) {
     const raw = (await stat(f)).size;
     const gz = /\.(js|css|txt|md)$|_headers$/.test(f) ? gzipSync(await readFile(f)).length : raw;
-    rows.push([relative(OUT_ROOT, f), raw, gz]);
+    if (f.startsWith(join(OUT, "logos/"))) (logos[1] += raw), (logos[2] += gz);
+    else rows.push([relative(OUT_ROOT, f), raw, gz]);
   }
+  rows.push(logos);
   const kb = (n: number) => `${(n / 1024).toFixed(1)} KB`.padStart(10);
   for (const [f, raw, gz] of rows) console.log(`${f.padEnd(56)} ${kb(raw)} ${kb(gz)} gz`);
   const total = rows.reduce((a, r) => [a[0] + r[1], a[1] + r[2]], [0, 0]);
@@ -157,7 +186,7 @@ const t0 = performance.now();
 await rm(OUT_ROOT, { recursive: true, force: true });
 await mkdir(OUT, { recursive: true });
 await generateEntries();
-const [, fontCss] = await Promise.all([buildJs(), buildFonts()]);
+const [, fontCss] = await Promise.all([buildLogos().then(buildJs), buildFonts()]);
 await buildCss(fontCss);
 await writeHeaders();
 if (!process.argv.includes("--quiet")) await report();
