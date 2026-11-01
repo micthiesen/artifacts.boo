@@ -14,6 +14,10 @@ Michael's own nits about the product (screenshots and notes tagged
 "Artifacts Nits" in Karakeep) are worked by `$nits`.
 `$audit` reviews the artifacts written since the last audit and improves
 the guide, recipes, kit and save checks from what it finds.
+`$maintain` keeps packages, tooling, diagram logos and Pele's diagrams
+current and deploys them. Run it yourself when a task changes dependencies,
+logos or diagram types, and after finishing other work here when the last
+run (`git log -1 --format=%ci --grep='^Maintenance:'`) is over 14 days old.
 
 ## Cost
 
