@@ -15,7 +15,7 @@ import { remarkBlockIds, type BlockInfo } from "./blocks.ts";
 import { logoErrors, logoHints } from "./logos.ts";
 import { checkMermaid, mermaidNodeIds, mermaidWidth, remarkMermaid, type MermaidBlock } from "./mermaid.ts";
 import { checkChangeGuide, mapKind } from "../shared/change-guide.ts";
-import { checkSources } from "../shared/sources.ts";
+import { checkedInFuture, checkSources, parseDay } from "../shared/sources.ts";
 import { checkShortlist } from "../shared/shortlist.ts";
 import { checkFindings, findingsQuadrant, rankFindings, type FindingsData } from "../shared/findings.ts";
 
@@ -525,12 +525,20 @@ function sourcesErrors(files: Record<string, string>, data: Record<string, JsonV
     if (!cites.has(path)) cites.set(path, new Set());
     cites.get(path)!.add(id);
   }
+  // <AsOf checked="…">: the page would say "Checked in 3 days".
+  for (const attrs of kitTags(files, "AsOf")) {
+    const checked = literalProp(attrs, "checked");
+    if (!checked) continue;
+    const day = parseDay(checked);
+    if (!day) errors.push({ path: "", message: `<AsOf checked="${checked}">: "checked" is an ISO date like 2026-10-28` });
+    else if (checkedInFuture(day, new Date())) errors.push({ path: "", message: `<AsOf checked="${checked}"> is in the future: use the day it was actually checked` });
+  }
   for (const file of new Set([...listed, ...cites.keys()])) {
     if (!(file in data)) {
       errors.push({ path: file, message: `<Sources>/<Cite> read ${file}, which doesn't exist: add a list of {id, title, url?, checked?, kind?, note?}` });
       continue;
     }
-    const problems = checkSources(data[file]);
+    const problems = checkSources(data[file], new Date());
     errors.push(...problems.map((message) => ({ path: file, message })));
     if (problems.length) continue;
     const ids = new Set((data[file] as { id: string }[]).map((s) => s.id));

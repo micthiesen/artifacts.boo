@@ -55,7 +55,10 @@ export function freshness(checked: unknown, next?: unknown, now: Date = new Date
   const at = parseDay(checked);
   if (!at) return null;
   const due = parseDay(next);
-  return { checked: at, relative: relativeDay(daysBetween(at, now)), absolute: absoluteDay(at), next: due, due: due !== null && daysBetween(due, now) >= 0 };
+  // A check can't be in the future. A day ahead is the writer's clock running on UTC (or further east) while
+  // it's still yesterday where the reader is; the save refuses anything further ahead.
+  const days = Math.max(daysBetween(at, now), 0);
+  return { checked: at, relative: relativeDay(days), absolute: absoluteDay(at), next: due, due: due !== null && daysBetween(due, now) >= 0 };
 }
 
 // ---- Components ----------------------------------------------------------------

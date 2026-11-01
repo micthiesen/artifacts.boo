@@ -17,10 +17,19 @@ export const SOURCE_KINDS: Record<SourceKind, { label: string; tone: "positive" 
 };
 
 /**
- * What's wrong with a sources file, as messages for whoever wrote it. Empty when it's fine. The Worker can run
- * this on save; the list shows the same messages if a bad file got through.
+ * Whether a "checked" day is later than any writer's today. A day of slack: an agent whose clock is on UTC
+ * writes tomorrow's date for anyone west of Greenwich in their evening.
  */
-export function checkSources(value: unknown): string[] {
+export function checkedInFuture(day: Date, now: Date): boolean {
+  return day.getTime() > now.getTime() + 86_400_000;
+}
+
+/**
+ * What's wrong with a sources file, as messages for whoever wrote it. Empty when it's fine. The Worker runs
+ * this on save with `now`; the list shows the same messages if a bad file got through, without the date
+ * check, since the reader's clock isn't the writer's.
+ */
+export function checkSources(value: unknown, now?: Date): string[] {
   if (!Array.isArray(value)) return ["sources must be a list of {id, title, url?, checked?, kind?, note?}"];
   const out: string[] = [];
   const seen = new Set<string>();
@@ -33,7 +42,11 @@ export function checkSources(value: unknown): string[] {
     else seen.add(r.id);
     if (typeof r.title !== "string" || !r.title.trim()) out.push(`${at}: "title" is missing`);
     if (r.url !== undefined && (typeof r.url !== "string" || !/^https?:\/\/\S+$/.test(r.url))) out.push(`${at}: "url" is an http(s) URL`);
-    if (r.checked !== undefined && parseDay(r.checked) === null) out.push(`${at}: "checked" is an ISO date like 2026-10-28`);
+    if (r.checked !== undefined) {
+      const day = parseDay(r.checked);
+      if (day === null) out.push(`${at}: "checked" is an ISO date like 2026-10-28`);
+      else if (now && checkedInFuture(day, now)) out.push(`${at}: "checked" is in the future: use the day it was actually checked`);
+    }
     if (r.kind !== undefined && !(typeof r.kind === "string" && r.kind in SOURCE_KINDS)) {
       out.push(`${at}: "kind" is one of ${Object.keys(SOURCE_KINDS).join(", ")}`);
     }

@@ -2,7 +2,7 @@
 // a router, a plan), each with a verdict, a price and when it was checked, and the evidence behind it. The Worker
 // checks it on every write, so a shortlist that recommends an option it doesn't list, cites nothing for an option
 // it keeps, or carries an impossible date is refused with a reason instead of shown wrong.
-import { parseDay, SOURCE_KINDS, type SourceKind } from "./sources.ts";
+import { checkedInFuture, parseDay, SOURCE_KINDS, type SourceKind } from "./sources.ts";
 
 export type Verdict = "pick" | "close" | "conditional" | "no";
 export type ShortlistEvidence = { label: string; url: string; kind?: SourceKind };
@@ -58,12 +58,10 @@ export function checkShortlist(value: unknown, now?: Date): string[] {
   if (!isObj(value)) return [`must be a JSON object (see artifact_guide topic "shortlist")`];
   const s = value;
   const out: string[] = [];
-  // A day's slack: "today" where the writer is can be tomorrow in UTC.
-  const latest = now ? new Date(now.getTime() + 86_400_000) : null;
   const date = (v: unknown, what: string) => {
     const d = day(v);
     if (!d) out.push(`${what} is a real date written YYYY-MM-DD, like 2026-10-28`);
-    else if (latest && d > latest) out.push(`${what} is in the future: use the day it was actually checked`);
+    else if (now && checkedInFuture(d, now)) out.push(`${what} is in the future: use the day it was actually checked`);
     return d;
   };
 

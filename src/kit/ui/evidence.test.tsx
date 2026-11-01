@@ -128,6 +128,12 @@ describe("AsOf", () => {
     expect(freshness("soon", undefined, now)).toBeNull();
   });
 
+  test("a check dated a day ahead reads today: the writer's clock was on UTC while it's evening here", () => {
+    const tomorrow = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+    const iso = `${tomorrow.getFullYear()}-${String(tomorrow.getMonth() + 1).padStart(2, "0")}-${String(tomorrow.getDate()).padStart(2, "0")}`;
+    expect(freshness(iso, undefined, now)!.relative).toBe("today");
+  });
+
   test("renders relative and absolute dates visibly, and the warning in words once due", async () => {
     const fresh = await markup(<AsOf checked={new Date(Date.now() - 3 * 86_400_000).toISOString().slice(0, 10)} scope="prices" />);
     expect(fresh).toContain("3 days ago");

@@ -132,6 +132,19 @@ test("sources: a citation must name a source in its file, and the file must be w
   expect(unlisted.warnings?.some((w) => w.includes("no <Sources"))).toBe(true);
 });
 
+test("a check dated in the future is refused, with a day's slack for writers on UTC", async () => {
+  const { buildArtifact } = await import("../src/worker/compile.ts");
+  const iso = (days: number) => new Date(Date.now() + days * 86_400_000).toISOString().slice(0, 10);
+  const asOf = (checked: string) => buildArtifact({ "index.mdx": `# T\n\n<AsOf checked="${checked}" />\n` });
+  expect((await asOf(iso(1))).errors).toEqual([]);
+  expect((await asOf(iso(3))).errors[0]?.message).toContain("is in the future");
+  expect((await asOf("soon")).errors[0]?.message).toContain("ISO date");
+  const sources = (checked: string) =>
+    buildArtifact({ "index.mdx": `# T\n\n<Sources />\n`, "data/sources.json": JSON.stringify([{ id: "a", title: "A", checked }]) });
+  expect((await sources(iso(0))).errors).toEqual([]);
+  expect((await sources(iso(3))).errors[0]?.message).toContain('"checked" is in the future');
+});
+
 test("a Decision's deciders must be literal emails, so the server can hold the page to them", async () => {
   const { buildArtifact } = await import("../src/worker/compile.ts");
   const page = (tag: string) => ({ "index.mdx": `# T\n\n${tag}\n` });
