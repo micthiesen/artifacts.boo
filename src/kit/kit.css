@@ -126,6 +126,9 @@
   --pele-surface-alt: var(--muted);
   --pele-border: color-mix(in oklab, var(--input) 55%, var(--card));
   --pele-accent: var(--primary);
+  /* Text on a fill (series colours, a diagram's own style): Pele picks whichever contrasts more. */
+  --pele-fg-on-dark: var(--foreground);
+  --pele-fg-on-light: var(--background);
   --pele-critical: var(--negative);
   --pele-error: var(--negative);
   --pele-font: var(--font-sans);

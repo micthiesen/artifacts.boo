@@ -7,15 +7,16 @@ import { render } from "pele";
 import table from "../src/shared/logos.json";
 import { logoRefs, logoSvg, type LogoTreatment } from "../src/shared/logos.ts";
 import { buildArtifact } from "../src/worker/compile.ts";
+import { loadLogoSet } from "../scripts/logo-icons.ts";
 import { logoErrors, logoHints, nearLogos } from "../src/worker/logos.ts";
 
 const ROOT = join(import.meta.dir, "..");
 const PKG = join(ROOT, "node_modules/@iconify-json/logos");
-const pack = JSON.parse(readFileSync(join(PKG, "icons.json"), "utf8"));
+const set = await loadLogoSet();
 const svg = (name: string) => {
   const t = table.logos[name as keyof typeof table.logos];
   const target = t.startsWith("=") ? t.slice(1) : name;
-  return logoSvg(target, pack.icons[target], 256, table.logos[target as keyof typeof table.logos] as LogoTreatment);
+  return logoSvg(target, set.icons[target], set.size, table.logos[target as keyof typeof table.logos] as LogoTreatment);
 };
 
 describe("logo table", () => {
@@ -24,7 +25,7 @@ describe("logo table", () => {
     expect(table.v.split("-")[0]).toBe(version);
     for (const [name, t] of Object.entries(table.logos)) {
       const target = t.startsWith("=") ? t.slice(1) : name;
-      expect(pack.icons[target], name).toBeDefined();
+      expect(set.icons[target], name).toBeDefined();
       if (t.startsWith("=")) expect(table.logos[target as keyof typeof table.logos], name).toMatch(/^[bmp]$/);
     }
   });
@@ -33,6 +34,10 @@ describe("logo table", () => {
     expect(table.logos.nextjs).toBe("=nextjs-icon");
     expect(table.logos.postgres).toBe("=postgresql");
     expect(table.logos.k8s).toBe("=kubernetes");
+    // Marks the pack lacks, vendored from svgl.
+    expect([table.logos.convex, table.logos["better-auth"], table.logos.render, table.logos.turso, table.logos.shadcn]).toEqual(["b", "p", "p", "m", "m"]);
+    expect(table.logos["shadcn-ui"]).toBe("=shadcn");
+    expect(svg("better-auth")).toContain('viewBox="0 0 500 500"');
   });
 
   test("black marks turn to the text colour; multi-colour marks that vanish on dark get a plate", () => {

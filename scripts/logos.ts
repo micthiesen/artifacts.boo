@@ -1,4 +1,4 @@
-// Writes src/shared/logos.json from @iconify-json/logos (CC0): every logo name a
+// Writes src/shared/logos.json from the logo sources (scripts/logo-icons.ts): every logo name a
 // diagram may use (`logos:<name>`) and how it is drawn on the kit's dark surface.
 // Run after bumping the pack: bun scripts/logos.ts (test/logos.test.ts fails
 // until the table matches the installed version).
@@ -10,17 +10,14 @@
 // small muted plate ("p"), since recolouring a multi-colour mark changes it.
 import { Resvg } from "@resvg/resvg-js";
 import { createHash } from "node:crypto";
-import { readFile, writeFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { logoPaints } from "../src/shared/logos.ts";
+import { loadLogoSet, type Icon } from "./logo-icons.ts";
 
 const ROOT = resolve(import.meta.dir, "..");
-const PKG = resolve(ROOT, "node_modules/@iconify-json/logos");
-type Icon = { body: string; width?: number; height?: number; left?: number; top?: number };
-type Pack = { width?: number; height?: number; icons: Record<string, Icon>; aliases?: Record<string, { parent: string }> };
-
-const pack: Pack = JSON.parse(await readFile(`${PKG}/icons.json`, "utf8"));
-const version: string = JSON.parse(await readFile(`${PKG}/package.json`, "utf8")).version;
+const set = await loadLogoSet();
+const version = set.version;
 
 /** Names agents reach for that the pack spells differently. */
 const GUESSES: Record<string, string> = {
@@ -32,6 +29,7 @@ const GUESSES: Record<string, string> = {
   ts: "typescript-icon",
   js: "javascript",
   gha: "github-actions",
+  "shadcn-ui": "shadcn",
 };
 
 // --secondary, oklch(0.255 0.018 262), as linear-light luminance.
@@ -49,7 +47,7 @@ const SURFACE = oklchLuminance(0.255, 0.018, 262);
 const lin = (c: number) => ((c /= 255) <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
 
 function treatment(icon: Icon): "b" | "m" | "p" {
-  const w = icon.width ?? pack.width ?? 256, h = icon.height ?? pack.height ?? 256;
+  const w = icon.width ?? set.size, h = icon.height ?? set.size;
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="${icon.left ?? 0} ${icon.top ?? 0} ${w} ${h}">${icon.body}</svg>`;
   const img = new Resvg(svg, { fitTo: { mode: "width", value: 64 } }).render();
   const px = img.pixels;
@@ -78,12 +76,12 @@ function treatment(icon: Icon): "b" | "m" | "p" {
 }
 
 // Dark-ground variants are for wordmarks on other sites; the treatment above does that job here.
-const names = Object.keys(pack.icons).filter((n) => !/-(dark|light)$/.test(n)).sort();
+const names = Object.keys(set.icons).filter((n) => !/-(dark|light)$/.test(n)).sort();
 const logos: Record<string, string> = {};
-for (const name of names) logos[name] = treatment(pack.icons[name]);
+for (const name of names) logos[name] = treatment(set.icons[name]);
 // A square mark reads at 24 px where a wordmark doesn't, so `logos:nextjs` draws nextjs-icon.
 for (const name of names) if (logos[`${name}-icon`]) logos[name] = `=${name}-icon`;
-for (const [alias, { parent }] of Object.entries(pack.aliases ?? {})) if (logos[parent] && !logos[alias]) logos[alias] = `=${parent}`;
+for (const [alias, { parent }] of Object.entries(set.aliases)) if (logos[parent] && !logos[alias]) logos[alias] = `=${parent}`;
 for (const [guess, target] of Object.entries(GUESSES)) {
   if (!logos[target]) throw new Error(`guess ${guess} points at missing logo ${target}`);
   if (!logos[guess]) logos[guess] = `=${target}`;

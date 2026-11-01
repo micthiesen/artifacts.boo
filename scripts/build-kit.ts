@@ -13,6 +13,7 @@ import { dirname, join, relative, resolve } from "node:path";
 import { createHash } from "node:crypto";
 import { gzipSync } from "node:zlib";
 import { logoSvg, type LogoTreatment } from "../src/shared/logos.ts";
+import { loadLogoSet } from "./logo-icons.ts";
 
 const ROOT = resolve(import.meta.dir, "..");
 const OUT_ROOT = join(ROOT, "dist/kit");
@@ -121,12 +122,12 @@ async function buildCss(fontCss: string) {
  */
 async function buildLogos(): Promise<string> {
   const table: { logos: Record<string, string> } = JSON.parse(await readFile(join(ROOT, "src/shared/logos.json"), "utf8"));
-  const pack = JSON.parse(await readFile(require.resolve("@iconify-json/logos/icons.json"), "utf8"));
+  const set = await loadLogoSet();
   const modules = Object.entries(table.logos).map(([name, t]): [string, string] => [
     name,
     t.startsWith("=")
       ? `export{default}from"./${t.slice(1)}.js";\n`
-      : `export default ${JSON.stringify(logoSvg(name, pack.icons[name], pack.width ?? 256, t as LogoTreatment))};\n`,
+      : `export default ${JSON.stringify(logoSvg(name, set.icons[name], set.size, t as LogoTreatment))};\n`,
   ]);
   const hash = createHash("sha256");
   for (const [name, code] of modules) hash.update(name).update("\0").update(code);

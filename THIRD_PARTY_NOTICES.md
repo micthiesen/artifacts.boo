@@ -33,6 +33,9 @@ No code from React Bits or Aceternity UI is used.
   @iconify-json/logos. CC0 1.0. Served at `/kit/v1/logos/`, one file per
   name, and drawn only in diagrams that name them. The marks are trademarks
   of their owners; showing one in a diagram implies no endorsement.
+- **svgl** (https://github.com/pheralb/svgl), MIT License, Copyright (c) 2022
+  Pablo Hdez: the Better Auth, Convex, Render, shadcn/ui and Turso marks, in
+  `scripts/logos-extra/` with the licence text.
 
 ## Fonts
 
