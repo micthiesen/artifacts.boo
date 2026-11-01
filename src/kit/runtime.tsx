@@ -25,6 +25,12 @@ export type BootOptions = {
 };
 
 let root: Root | null = null;
+
+/** Tests: take the page down, so its subscriptions don't outlive the DOM they were rendered into. */
+export function unmount() {
+  root?.unmount();
+  root = null;
+}
 let booted = false;
 
 export function readBoot(doc: Document = document): FrameBoot {

@@ -6,9 +6,11 @@ import type { FrameMessage, ShellMessage } from "../shared/protocol.ts";
 GlobalRegistrator.register();
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 const { act } = await import("react");
-const { boot } = await import("./runtime.tsx");
+const { boot, unmount } = await import("./runtime.tsx");
 
 afterAll(async () => {
+  // A page left mounted stays subscribed to the store; the next file's store.reset() would wake it with no DOM.
+  await act(async () => unmount());
   await GlobalRegistrator.unregister();
 });
 

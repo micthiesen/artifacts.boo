@@ -281,7 +281,7 @@ test("each workspace's consent uses its own authorization server, whichever this
       await fetchAs(`${origin}/oauth/register`, { method: "POST", headers: { "Content-Type": "application/json", Origin: "" }, body: JSON.stringify({ client_name: "C", redirect_uris: ["http://127.0.0.1:9/cb"], token_endpoint_auth_method: "none" }) })
     ).json()) as { client_id: string };
     const q = new URLSearchParams({ response_type: "code", client_id: reg.client_id, redirect_uri: "http://127.0.0.1:9/cb", code_challenge: "a".repeat(43), code_challenge_method: "S256", state: "s", resource: `${origin}/mcp` });
-    const { cookieFor } = { cookieFor: async () => `__Host-art_session=${await (await import("../src/worker/session.ts")).signToken(h.env.SESSION_SECRET, "session", 600, { e: MIA, h: new URL(origin).hostname })}` };
+    const { cookieFor } = { cookieFor: async () => `__Host-art_session=${await (await import("../src/worker/session.ts")).signToken(h.env.SESSION_SECRET, "session", 600, { e: MIA, h: new URL(origin).hostname, iat: Math.floor(Date.now() / 1000) })}` };
     return fetchAs(`${origin}/authorize?${q}`, { cookie: await cookieFor() });
   };
   expect((await authorize(ACME)).status).toBe(200);
@@ -297,7 +297,7 @@ test("OAuth: consent, code exchange with PKCE, then MCP as the member", async ()
   const challenge = b64u(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier)));
   const q = new URLSearchParams({ response_type: "code", client_id: reg.client_id, redirect_uri: "http://127.0.0.1:9/cb", code_challenge: challenge, code_challenge_method: "S256", state: "s", resource: `${ACME}/mcp`, scope: "artifacts" });
   const { signToken } = await import("../src/worker/session.ts");
-  const cookie = `__Host-art_session=${await signToken(h.env.SESSION_SECRET, "session", 600, { e: MIA, h: "acme.artifacts.test" })}`;
+  const cookie = `__Host-art_session=${await signToken(h.env.SESSION_SECRET, "session", 600, { e: MIA, h: "acme.artifacts.test", iat: Math.floor(Date.now() / 1000) })}`;
   const page = await fetchAs(`${ACME}/authorize?${q}`, { cookie });
   const handle = /name="handle" value="([^"]+)"/.exec(await page.text())![1];
   const consent = page.headers.getSetCookie().map((c) => c.split(";")[0]).join("; ");
@@ -317,7 +317,9 @@ test("OAuth: consent, code exchange with PKCE, then MCP as the member", async ()
   const settings = (await (await fetchAs(`${ACME}/api/settings`, { cookie })).json()) as any;
   expect(settings.apps.map((a: any) => a.client)).toEqual(["Test client"]);
   // Leaving the workspace revokes the grant.
-  await fetchAs(`${ACME}/api/settings/members`, { method: "POST", cookie: `__Host-art_session=${await signToken(h.env.SESSION_SECRET, "session", 600, { e: ADMIN, h: "acme.artifacts.test" })}`, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email: MIA, role: null }) });
+  // Sessions carry iat, as real ones do: another file may have signed ADMIN out everywhere in this isolate.
+  const left = await fetchAs(`${ACME}/api/settings/members`, { method: "POST", cookie: `__Host-art_session=${await signToken(h.env.SESSION_SECRET, "session", 600, { e: ADMIN, h: "acme.artifacts.test", iat: Math.floor(Date.now() / 1000) })}`, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email: MIA, role: null }) });
+  expect(left.status).toBe(200);
   const after = await fetchAs(`${ACME}/mcp`, { method: "POST", headers: { Authorization: `Bearer ${tokens.access_token}`, "Content-Type": "application/json", Origin: "" }, body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list" }) });
   expect(after.status).toBe(401);
 });
