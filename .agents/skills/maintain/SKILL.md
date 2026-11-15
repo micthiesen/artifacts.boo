@@ -41,7 +41,11 @@ bun outdated; bun audit; npm view bun version; npm view alchemy dist-tags
   The effect family (`effect`, `@effect/*`, and the overrides for
   `@effect/platform-node-shared` and `@effect/sql-d1`) stays at 4.0.7: effect
   4.1 drops the `effect/<Module>` subpaths alchemy 2.0.0-beta.84 imports, so
-  only a deploy fails. Lift a hold only once its reason is gone, and say so.
+  only a deploy fails. alchemy 2.0.0-beta.87 needs effect ^4.1.4, so the two
+  move together, in a run of their own with Michael told first: betas 85 to
+  87 change Cloudflare state and how Durable Object classes are reconciled,
+  and the Durable Objects hold every workspace's data. Lift a hold only once
+  its reason is gone, and say so.
 - **Read the changelog** of every package whose version changes beyond a
   patch (GitHub releases via `gh api repos/<owner>/<repo>/releases`), and of
   every patch to pele, recharts, react, tailwindcss, @base-ui/react and
