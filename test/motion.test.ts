@@ -109,7 +109,8 @@ describe("scenes", () => {
     // Its frames are one coalesced redraw and the turn to a view, which ends.
     expect(scene).toMatch(/instant \? 0 : motionMs\("slow"\)/);
     expect(scene).toMatch(/motionEase\(\)/);
-    expect(scene).toMatch(/if \(t < 1\) tween\.current = requestAnimationFrame\(step\)/);
+    expect(scene).toMatch(/run\(glide \? motionMs\("slow"\) : 0,/);
+    expect(scene).toMatch(/if \(t < 1\) tween\.current = requestAnimationFrame\(tick\)/);
   });
 
   test("the catalog and the save check name the three.js revision that is pinned", () => {

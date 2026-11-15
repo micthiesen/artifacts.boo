@@ -15,7 +15,10 @@ import {
   parseColor,
   POLAR_MIN,
   sceneProblems,
+  sheetCell,
+  stepProblem,
   stepView,
+  stepViewAt,
   tokenColor,
   VIEW_ORBIT,
   viewOf,
@@ -129,6 +132,39 @@ describe("the camera", () => {
     // Turned by hand: l starts from the first view, h from the last.
     expect(stepView(null, 1)).toBe("angle");
     expect(stepView(null, -1)).toBe("top");
+  });
+});
+
+describe("steps", () => {
+  test("steps are at least two, each with words, and a side that exists if it names one", () => {
+    expect(stepProblem([{ text: "One." }, { title: "Two", text: "Two.", view: "top" }])).toBeNull();
+    expect(stepProblem([{ text: "Only one." }])).toContain("at least two");
+    expect(stepProblem("nope")).toContain("at least two");
+    expect(stepProblem([{ text: "One." }, { title: "No words" }])).toBe('step 2 needs "text": what this step shows, in a sentence');
+    expect(stepProblem([{ text: "One." }, { text: "  " }])).toContain("step 2 needs");
+    expect(stepProblem([{ text: "One.", view: "iso" }, { text: "Two." }])).toBe('step 1\'s "view" is one of "angle", "front", "side", "top"');
+    expect(stepProblem([{ text: "One.", title: 3 }, { text: "Two." }])).toContain("step 1's \"title\"");
+  });
+
+  test("a step is seen from the last side a step asked for, else the scene's own", () => {
+    const steps = [{}, { view: "top" as const }, {}, { view: "side" as const }];
+    expect(steps.map((_, i) => stepViewAt(steps, i, "angle"))).toEqual(["angle", "top", "top", "side"]);
+    expect(stepViewAt(steps, 99, "front")).toBe("side");
+    expect(stepViewAt([], 0, "front")).toBe("front");
+  });
+
+  test("the render check lays its pictures out two across, in as many rows as they need", () => {
+    expect(sheetCell(0, 4, 600, 400)).toEqual({ x: 0, y: 0, w: 300, h: 200 });
+    expect(sheetCell(3, 4, 600, 400)).toEqual({ x: 300, y: 200, w: 300, h: 200 });
+    // Three steps: two rows, the third alone on the second.
+    expect(sheetCell(2, 3, 600, 400)).toEqual({ x: 0, y: 200, w: 300, h: 200 });
+    expect(sheetCell(1, 2, 600, 200)).toEqual({ x: 300, y: 0, w: 300, h: 200 });
+  });
+
+  test("a walk-through stops at eight steps", () => {
+    const steps = (n: number) => Array.from({ length: n }, (_, i) => ({ text: `Step ${i + 1}.` }));
+    expect(stepProblem(steps(8))).toBeNull();
+    expect(stepProblem(steps(11))).toBe("11 steps is too many to follow: keep to 8 (split a longer walk-through into two scenes)");
   });
 });
 

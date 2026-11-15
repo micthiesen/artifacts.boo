@@ -173,8 +173,9 @@ where a test can catch them; keep the rest by hand.
   `isAnimationActive={false}`).
 - A `<Scene>` has no frame loop. It draws when the reader turns it or its
   data changes, and a save refuses artifact code that starts one. Picking a
-  view with a pointer turns the camera there over `--motion-slow`
-  (`motionEase()` gives code the curve CSS would use); keys jump.
+  view or a step with a pointer turns the camera there, and glides the parts
+  that moved, over `--motion-slow` (`motionEase()` gives code the curve CSS
+  would use); keys jump.
 
 **One scale.** Durations and curves are the `--motion-*` tokens in
 `src/kit/theme.css`, mirrored in `src/shell/shell.css`:

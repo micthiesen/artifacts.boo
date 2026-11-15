@@ -92,6 +92,42 @@ export function stepView(at: SceneView | null, dir: 1 | -1): SceneView | null {
   return VIEWS[from + dir] ?? null;
 }
 
+// ---- steps -------------------------------------------------------------------
+
+/**
+ * One stop in a scene walked through in order (<Scene steps>): what to say, and optionally the side to see it
+ * from. build() is told which step is showing and builds the scene as it is then.
+ */
+export type SceneStep = { title?: string; text: string; view?: SceneView };
+
+/** Past this a reader loses the thread, and the render check's sheet of steps gets too small to judge. */
+export const MAX_STEPS = 8;
+
+/** What is wrong with `steps` as written (the first thing), or null. */
+export function stepProblem(steps: unknown): string | null {
+  if (!Array.isArray(steps) || steps.length < 2) return "steps is a list of at least two {title?, text, view?}: one step is just the scene";
+  if (steps.length > MAX_STEPS) return `${steps.length} steps is too many to follow: keep to ${MAX_STEPS} (split a longer walk-through into two scenes)`;
+  for (const [i, step] of steps.entries()) {
+    const s = (step ?? {}) as Partial<Record<keyof SceneStep, unknown>>;
+    if (typeof s.text !== "string" || !s.text.trim()) return `step ${i + 1} needs "text": what this step shows, in a sentence`;
+    if (s.title !== undefined && typeof s.title !== "string") return `step ${i + 1}'s "title" is a few words of text`;
+    if (s.view !== undefined && !VIEWS.includes(s.view as SceneView)) return `step ${i + 1}'s "view" is one of ${VIEWS.map((v) => `"${v}"`).join(", ")}`;
+  }
+  return null;
+}
+
+/** The side step `at` is seen from: the last one a step up to it asked for, else the scene's own. */
+export function stepViewAt(steps: readonly Pick<SceneStep, "view">[], at: number, first: SceneView): SceneView {
+  for (let i = Math.min(at, steps.length - 1); i >= 0; i--) if (steps[i]!.view) return steps[i]!.view!;
+  return first;
+}
+
+/** Where the render check draws its `i`th picture of `count` (four sides, or one per step): two across. */
+export function sheetCell(i: number, count: number, width: number, height: number): { x: number; y: number; w: number; h: number } {
+  const rows = Math.ceil(count / 2);
+  return { x: (i % 2) * (width / 2), y: Math.floor(i / 2) * (height / rows), w: width / 2, h: height / rows };
+}
+
 // ---- labels ------------------------------------------------------------------
 
 /** A label to place: where its point is in the view, and how big its text is. Null when the point isn't in view. */

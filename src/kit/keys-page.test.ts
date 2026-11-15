@@ -207,6 +207,33 @@ test("a scene is one stop: h and l step through its views and move on at the end
   expect(entered).toBe(1);
 });
 
+test("a stepped scene is one stop too: its figure, bar and step text sit inside the card, and h and l walk the steps", () => {
+  page(`
+    <p id="before" data-box="0 0 400 40">Before.</p>
+    <div id="card" data-key-stop data-box="0 50 400 560">
+      <figure data-speak="scene" data-box="0 50 400 440">
+        <figcaption data-box="0 50 400 20">Assembly</figcaption>
+        <div role="application" tabindex="0" data-box="0 80 400 320"><canvas></canvas></div>
+        <p data-scene-about data-box="0 445 400 20">How it goes together.</p>
+      </figure>
+      <div data-box="0 500 400 100">
+        <div role="group" aria-label="Steps" data-speak="skip" data-box="0 500 400 30"><button data-box="0 500 90 28">Previous</button><button data-box="310 500 90 28">Next</button></div>
+        <p data-box="0 540 400 20">Board in</p>
+        <p data-box="0 565 400 20">The board drops onto the standoffs.</p>
+      </div>
+    </div>
+    <p id="after" data-box="0 620 400 40">After.</p>`);
+  let step = 0;
+  registerKeyWidget(document.getElementById("card")!, { across: (dir) => (step + dir >= 0 && step + dir <= 2 ? ((step += dir), true) : false) });
+  expect(walk("down")).toEqual(["before", "card", "after"]);
+  press("up");
+  press("right", 2);
+  expect(step).toBe(2);
+  expect(id()).toBe("card");
+  press("left");
+  expect(step).toBe(1);
+});
+
 test("a stop Listen skips can still be a declared stop", () => {
   page(`<div data-key-scope data-box="0 0 400 200"><ul id="files" data-key-stop data-speak="skip" data-box="0 0 400 40"><li data-box="0 0 400 20">a.ts</li></ul></div>`);
   expect(walk("down")).toEqual(["files"]);

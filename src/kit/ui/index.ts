@@ -30,7 +30,7 @@ export type { ChartProps } from "./chart.tsx";
 export { Diagram } from "./diagram.tsx";
 export type { DiagramProps } from "./diagram.tsx";
 export { Scene } from "./scene.tsx";
-export type { SceneProps, SceneBuild, SceneContext, SceneColors, ScenePoint, SceneView } from "./scene.tsx";
+export type { SceneProps, SceneBuild, SceneContext, SceneColors, ScenePoint, SceneStep, SceneView } from "./scene.tsx";
 export { Diff } from "./diff.tsx";
 export type { DiffProps } from "./diff.tsx";
 export { ChangeGuide } from "./change-guide.tsx";
