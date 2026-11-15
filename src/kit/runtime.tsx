@@ -396,6 +396,8 @@ export async function boot(options: BootOptions = {}): Promise<void> {
       if (checkHeld() && Date.now() - started < CHECK_HOLD_MS) return void setTimeout(finish, 50);
       // Still held: say so, rather than pass a page whose scene nobody looked at.
       if (checkHeld()) checkErrors.push("A 3D scene hadn't finished drawing when the render check ended, so it wasn't checked: run artifact_check again, and make the scene lighter if it keeps happening");
+      // What loaded late (a lazy chart, a scene's four views) has moved the section since the first scroll.
+      if (section) sectionElement(section)?.scrollIntoView({ block: "start" });
       emitCheck(checkErrors.length ? "error" : "rendered", checkErrors, rootEl);
     };
     setTimeout(finish, 600);
