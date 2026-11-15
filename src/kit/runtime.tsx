@@ -386,9 +386,16 @@ export async function boot(options: BootOptions = {}): Promise<void> {
     for (const fn of afterRender.splice(0)) fn();
   }, 150);
   if (check) {
-    // A check of one section (#slug in the frame URL) scrolls there, so the screenshot shows it.
+    // A check of one section (#slug in the frame URL) scrolls there, so the screenshot shows it, and stays
+    // there: whatever loads late above it (a lazy chart, a table, another scene) keeps moving it until the
+    // screenshot is taken, which is after this result is published.
     const section = new URLSearchParams(location.search).get("section");
-    if (section) whenRendered(() => scrollToSection(section, 10));
+    if (section) {
+      whenRendered(() => {
+        scrollToSection(section, 10);
+        new ResizeObserver(() => sectionElement(section)?.scrollIntoView({ block: "start" })).observe(rootEl);
+      });
+    }
     // Let effects and lazy chunks (charts) settle before declaring success. A scene holds the result until it
     // has drawn its first frame and said what it found, within what the headless browser waits for.
     const started = Date.now();
@@ -396,8 +403,6 @@ export async function boot(options: BootOptions = {}): Promise<void> {
       if (checkHeld() && Date.now() - started < CHECK_HOLD_MS) return void setTimeout(finish, 50);
       // Still held: say so, rather than pass a page whose scene nobody looked at.
       if (checkHeld()) checkErrors.push("A 3D scene hadn't finished drawing when the render check ended, so it wasn't checked: run artifact_check again, and make the scene lighter if it keeps happening");
-      // What loaded late (a lazy chart, a scene's four views) has moved the section since the first scroll.
-      if (section) sectionElement(section)?.scrollIntoView({ block: "start" });
       emitCheck(checkErrors.length ? "error" : "rendered", checkErrors, rootEl);
     };
     setTimeout(finish, 600);
