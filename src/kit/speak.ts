@@ -7,7 +7,7 @@
 // being spoken.
 //
 // Components can steer it: data-speak="skip" leaves an element out,
-// data-speak="<kind>" reads it as one unit (stat, chart, diagram), and
+// data-speak="<kind>" reads it as one unit (stat, chart, diagram, scene), and
 // aria-hidden content is never read.
 
 import type { FrameMessage, SpeakUnit } from "../shared/protocol.ts";
@@ -177,6 +177,22 @@ function walk(el: Element) {
       b.trimEnd();
     }
     if (!bits.length) into(b, el);
+    return push(el, b);
+  }
+  if (kind === "scene") {
+    // A canvas says nothing: the title, then the description written for exactly this.
+    const b = new Spoken();
+    const caption = el.querySelector("figcaption");
+    if (caption) {
+      into(b, caption);
+      b.pause();
+    }
+    b.add("A 3D scene");
+    const about = el.querySelector("[data-scene-about]");
+    if (about) {
+      b.pause();
+      into(b, about);
+    }
     return push(el, b);
   }
   if (kind === "chart" || kind === "diagram" || tag === "FIGURE") {

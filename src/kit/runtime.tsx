@@ -4,6 +4,7 @@ import * as React from "react";
 import { createRoot, type Root } from "react-dom/client";
 import type { FrameBoot, FrameMessage, JsonValue, ShellMessage } from "../shared/protocol.ts";
 import * as store from "./store.ts";
+import { checkHeld } from "./check.ts";
 import { ErrorBoundary, ErrorPanel } from "./ui/error.tsx";
 import { TooltipProvider } from "./ui/controls.tsx";
 import { Page } from "./ui/layout.tsx";
@@ -388,10 +389,21 @@ export async function boot(options: BootOptions = {}): Promise<void> {
     // A check of one section (#slug in the frame URL) scrolls there, so the screenshot shows it.
     const section = new URLSearchParams(location.search).get("section");
     if (section) whenRendered(() => scrollToSection(section, 10));
-    // Let effects and lazy chunks (charts) settle before declaring success.
-    setTimeout(() => emitCheck(checkErrors.length ? "error" : "rendered", checkErrors, rootEl), 600);
+    // Let effects and lazy chunks (charts) settle before declaring success. A scene holds the result until it
+    // has drawn its first frame and said what it found, within what the headless browser waits for.
+    const started = Date.now();
+    const finish = () => {
+      if (checkHeld() && Date.now() - started < CHECK_HOLD_MS) return void setTimeout(finish, 50);
+      // Still held: say so, rather than pass a page whose scene nobody looked at.
+      if (checkHeld()) checkErrors.push("A 3D scene hadn't finished drawing when the render check ended, so it wasn't checked: run artifact_check again, and make the scene lighter if it keeps happening");
+      emitCheck(checkErrors.length ? "error" : "rendered", checkErrors, rootEl);
+    };
+    setTimeout(finish, 600);
   }
 }
+
+/** How long a render check waits for a component that holds it (src/kit/check.ts). */
+const CHECK_HOLD_MS = 8000;
 
 let rendered = false;
 const afterRender: (() => void)[] = [];

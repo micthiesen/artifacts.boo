@@ -169,6 +169,44 @@ test("a widget with nothing to do for a key leaves it to the one around it", () 
   expect(tab).toBe(1);
 });
 
+test("a scene is one stop: h and l step through its views and move on at the ends, Enter goes in to turn it", async () => {
+  const { stepView } = await import("../shared/scene.ts");
+  page(`
+    <p id="before" data-box="0 0 400 40">Before.</p>
+    <figure id="scene" data-key-stop data-speak="scene" data-box="0 50 400 420">
+      <figcaption data-box="0 50 400 20">Home rack</figcaption>
+      <div role="application" tabindex="0" data-box="0 80 400 320"><canvas></canvas></div>
+      <div data-box="0 410 400 30"><button data-box="0 410 60 28">Angle</button><button data-box="70 410 60 28">Front</button></div>
+      <p id="about" data-scene-about data-box="0 445 400 20">A 12U rack.</p>
+    </figure>
+    <p id="after" data-box="210 480 190 40">After.</p>`);
+  const at: { view: Parameters<typeof stepView>[0] } = { view: "angle" };
+  let entered = 0;
+  registerKeyWidget(document.getElementById("scene")!, {
+    across: (dir) => {
+      const next = stepView(at.view, dir);
+      if (next) at.view = next;
+      return !!next;
+    },
+    enter: () => (entered++, true),
+  });
+  // Its caption, view buttons and description aren't stops of their own.
+  expect(walk("down")).toEqual(["before", "scene", "after"]);
+  press("up");
+  expect(id()).toBe("scene");
+  press("right", 3);
+  expect(at.view).toBe("top");
+  expect(id()).toBe("scene");
+  press("left", 3);
+  expect(at.view).toBe("angle");
+  // Before the first view there is nothing to step to, and no block to the left: the cursor stays.
+  press("left");
+  expect(at.view).toBe("angle");
+  expect(id()).toBe("scene");
+  press("open");
+  expect(entered).toBe(1);
+});
+
 test("a stop Listen skips can still be a declared stop", () => {
   page(`<div data-key-scope data-box="0 0 400 200"><ul id="files" data-key-stop data-speak="skip" data-box="0 0 400 40"><li data-box="0 0 400 20">a.ts</li></ul></div>`);
   expect(walk("down")).toEqual(["files"]);

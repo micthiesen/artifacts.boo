@@ -46,6 +46,7 @@ async function generateEntries() {
     "react-dom-client.js": cjsReexport("react-dom/client", "react-dom/cjs/react-dom-client.production.js", true),
     "lucide.js": `export * from "lucide-react";`,
     "recharts.js": `export * from "recharts";`,
+    "three.js": `export * from "three";`,
   };
   for (const [name, src] of Object.entries(files)) await writeFile(join(GEN, name), src + "\n");
 }
@@ -59,6 +60,7 @@ async function buildJs(logosDir: string) {
       "react-dom-client": join(GEN, "react-dom-client.js"),
       lucide: join(GEN, "lucide.js"),
       recharts: join(GEN, "recharts.js"),
+      three: join(GEN, "three.js"),
       ui: join(ROOT, "src/kit/ui/index.ts"),
       hooks: join(ROOT, "src/kit/hooks.ts"),
       runtime: join(ROOT, "src/kit/runtime.tsx"),

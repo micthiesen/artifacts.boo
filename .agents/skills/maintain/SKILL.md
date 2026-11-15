@@ -12,9 +12,8 @@ argument-hint: "[packages | logos | diagrams] (default: all)"
 
 # Maintain
 
-Everything here should be current and look right without Michael noticing it
-was ever stale. Each run updates what moved upstream, fills gaps real use
-exposed, proves it in the gate, a deploy and a look, and records itself.
+Each run updates what moved upstream, fills gaps real use exposed, proves it
+in the gate, a deploy and a look, and records itself.
 Invoking it is a request to carry it through `$autopilot`: decide, ship,
 deploy and verify; ask Michael only about product calls.
 
@@ -50,7 +49,11 @@ bun outdated; bun audit; npm view bun version; npm view alchemy dist-tags
 - **Update:** `bun update` for in-range versions and a refreshed lockfile,
   edit `package.json` for exact pins and majors. Keep exact pins exact.
   `onnxruntime-web` is pinned with Listen's voice build (`scripts/build.ts`):
-  change it only with a Listen check in the browser.
+  change it only with a Listen check in the browser. `three` is pinned
+  because saved artifacts call it directly from `<Scene>` build code: cross
+  a release only with its Migration Guide read, the `scene` harness sample
+  looked at (`/frame/scene.check.html`), and, after the deploy, an
+  `artifact_check` of every artifact `artifact_list` finds for `three`.
 - **Bun and CI:** `.github/workflows/ci.yml` runs the same Bun as local
   (`bun --version`); bump `bun upgrade` and the workflow together. Bring
   actions to their latest majors (`gh api repos/<action>/releases/latest`).

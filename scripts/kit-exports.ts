@@ -9,6 +9,7 @@ const hooks = await import("../src/kit/hooks.ts");
 const react = await import("react");
 const lucide = await import("lucide-react");
 const recharts = await import("recharts");
+const three = await import("three");
 const mdx = Object.keys((ui as { useMDXComponents: () => Record<string, unknown> }).useMDXComponents());
 const names = (m: object) => Object.keys(m).filter((k) => k !== "default").sort();
 const out = {
@@ -19,7 +20,10 @@ const out = {
     "react/jsx-runtime": ["Fragment", "jsx", "jsxs"],
     "lucide-react": names(lucide),
     recharts: names(recharts),
+    three: names(three),
   },
+  // Save errors name the revision a missing three.js name was checked against.
+  threeRevision: three.REVISION,
   mdxComponents: mdx.filter((k) => /^[A-Z]/.test(k)).sort(),
 };
 await Bun.write("src/worker/kit-exports.json", `${JSON.stringify(out)}\n`);

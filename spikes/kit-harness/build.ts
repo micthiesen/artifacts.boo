@@ -7,7 +7,7 @@ import "../text-loader.ts";
 import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join, relative, resolve } from "node:path";
 
-const { compileFile, compileCss } = await import("../../src/worker/compile.ts");
+const { compileFile, compileCss, rewriteRelativeImports } = await import("../../src/worker/compile.ts");
 
 const ROOT = resolve(import.meta.dir, "../..");
 const SAMPLES = join(import.meta.dir, "samples");
@@ -22,6 +22,7 @@ export const KIT_IMPORTS: Record<string, string> = {
   "@a/hooks": "/kit/v1/hooks.js",
   "lucide-react": "/kit/v1/lucide.js",
   recharts: "/kit/v1/recharts.js",
+  three: "/kit/v1/three.js",
 };
 
 async function walk(dir: string): Promise<string[]> {
@@ -59,13 +60,13 @@ for (const name of (await readdir(SAMPLES)).sort()) {
     const { module, errors } = await compileFile(path, source, paths);
     if (errors.length) throw new Error(`${name}/${path}: ${errors.map((e) => e.message).join("; ")}`);
     if (!module) continue;
-    // The Worker rewrites relative imports to @art/<path>; the samples have none.
-    imports[`@art/${path}`] = dataUrl(module.code);
+    // As the Worker does: a sample's own modules are import-map entries too.
+    imports[`@art/${path}`] = dataUrl(await rewriteRelativeImports(path, module.code, paths));
     for (const c of module.classes) classes.add(c);
   }
   const css = await compileCss(ENTRY_CSS, classes);
   const boot = { artifactId: `sample-${name}`, version: 1, entry: `@art/${entry}`, data, title: name };
-  const html = `<!doctype html>
+  const page = (boot: object) => `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -79,7 +80,11 @@ for (const name of (await readdir(SAMPLES)).sort()) {
 <body><div id="root"></div></body>
 </html>
 `;
+  const html = page(boot);
   await writeFile(join(OUT, "frames", `${name}.html`), html);
+  // The page as the render check loads it (/frame/<name>.check.html, opened on its own): no shell, and a
+  // scene draws its four views.
+  await writeFile(join(OUT, "frames", `${name}.check.html`), page({ ...boot, check: true }));
   manifest.push({ name, entry });
   console.log(`${name}: ${entry}, ${files.length} files, frame ${(html.length / 1024).toFixed(1)} KB, css ${(css.length / 1024).toFixed(1)} KB`);
 }

@@ -1,6 +1,7 @@
 // @a/ui: the component kit available to every artifact.
 import { Chart, Sparkline } from "./chart.tsx";
 import { Diagram } from "./diagram.tsx";
+import { Scene } from "./scene.tsx";
 import { Diff } from "./diff.tsx";
 import { ChangeGuide } from "./change-guide.tsx";
 import { Approval, Checklist, Comments, Form, Notes, Poll } from "./collab.tsx";
@@ -28,6 +29,8 @@ export { Chart, Sparkline } from "./chart.tsx";
 export type { ChartProps } from "./chart.tsx";
 export { Diagram } from "./diagram.tsx";
 export type { DiagramProps } from "./diagram.tsx";
+export { Scene } from "./scene.tsx";
+export type { SceneProps, SceneBuild, SceneContext, SceneColors, ScenePoint, SceneView } from "./scene.tsx";
 export { Diff } from "./diff.tsx";
 export type { DiffProps } from "./diff.tsx";
 export { ChangeGuide } from "./change-guide.tsx";
@@ -68,6 +71,7 @@ const kitComponents = {
   Chart,
   Sparkline,
   Diagram,
+  Scene,
   Diff,
   ChangeGuide,
   Poll,

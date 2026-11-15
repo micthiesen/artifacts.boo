@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { buildArtifact, compileFile } from "../src/worker/compile.ts";
+import { bareCode, buildArtifact, compileFile } from "../src/worker/compile.ts";
 
 const files = new Set<string>(["app.tsx", "chart.tsx"]);
 
@@ -237,4 +237,115 @@ test("save warnings for dated headings, hand-written freshness and wide tables",
   expect(wide('<Table data="r.json" columns="a b" />')).toEqual([]);
   const few = Array.from({ length: 10 }, (_, i) => ({ a: i, b: "x", c: "y", d: "z" }));
   expect(dataWarnings({ "index.mdx": '<Table data="r.json" />' }, { "data/r.json": few as never }).some((w) => w.includes("cards"))).toBe(false);
+});
+
+const SCENE_HEAD = 'import * as THREE from "three";\nimport { Scene } from "@a/ui";';
+const SCENE_OK = 'return <Scene title="Rack" description="Two racks, side by side." build={({ scene, solid }) => { scene.add(solid(new THREE.BoxGeometry(1, 1, 1))); }} />;';
+const sceneApp = (body = SCENE_OK, head = SCENE_HEAD) => ({ "app.tsx": `${head}\nexport default function App() {\n${body}\n}` });
+const messages = async (files: Record<string, string>) => (await buildArtifact(files)).errors.map((e) => e.message);
+
+test("three.js saves inside a <Scene>, and only there", async () => {
+  expect(await messages(sceneApp())).toEqual([]);
+  // In MDX, the scene lives in its own module.
+  expect(await messages({ "index.mdx": 'import Rack from "./rack";\n\n# Rack\n\n<Rack />\n', "rack.tsx": sceneApp()["app.tsx"] })).toEqual([]);
+  const loose = await messages({ "app.tsx": 'import * as THREE from "three";\nexport default () => <p>{THREE.REVISION}</p>;' });
+  expect(loose).toHaveLength(1);
+  expect(loose[0]).toContain("no <Scene> draws with it");
+  // Only the package root: the kit already has what the addons are usually imported for.
+  const addon = await messages(sceneApp(SCENE_OK, `${SCENE_HEAD}\nimport { OrbitControls } from "three/addons/controls/OrbitControls.js";`));
+  expect(addon.some((m) => m.includes('only "three" itself is'))).toBe(true);
+  expect(addon.some((m) => m.includes("don't add controls"))).toBe(true);
+});
+
+test("scene code that brings its own renderer, camera, loop or loader is refused, with what to do instead", async () => {
+  const own = (line: string) => messages(sceneApp(`${line}\n${SCENE_OK}`));
+  expect((await own("const r = new THREE.WebGLRenderer();"))[0]).toContain("owns the renderer");
+  expect((await own("const c = new THREE.PerspectiveCamera(50, 1, 0.1, 100);"))[0]).toContain("frames its own camera");
+  expect((await own("requestAnimationFrame(() => {});"))[0]).toContain("no frame loop");
+  expect((await own("new THREE.TextureLoader().load('x.png');"))[0]).toContain("no network");
+  // A comment or a fenced example names these without using them, and a page without three.js may loop as it likes.
+  expect(await own("// no WebGLRenderer or requestAnimationFrame here")).toEqual([]);
+  expect(await messages({ "index.mdx": '# Notes\n\n```js\nimport * as THREE from "three";\nnew THREE.WebGLRenderer();\n```\n' })).toEqual([]);
+  expect(await messages({ "app.tsx": "export default function App() { requestAnimationFrame(() => {}); return <p>x</p>; }" })).toEqual([]);
+});
+
+test("a Scene has a title and a description, and three's own Scene isn't imported over the kit's", async () => {
+  const untitled = await messages(sceneApp('return <Scene description="Two racks." build={({ scene }) => { scene.add(new THREE.Group()); }} />;'));
+  expect(untitled).toHaveLength(1);
+  expect(untitled[0]).toContain("needs a title (");
+  const blank = await messages(sceneApp('return <Scene title="" build={({ scene }) => { scene.add(new THREE.Group()); }} />;'));
+  expect(blank[0]).toContain("needs a title and a description");
+  // Worked out in code (a desk's width in the description) or passed on in a spread: the component checks those itself.
+  expect(await messages(sceneApp('const t = "Rack";\nreturn <Scene title={t} description={`${t}, 12U`} build={({ scene }) => { scene.add(new THREE.Group()); }} />;'))).toEqual([]);
+  expect(await messages(sceneApp('const props = { title: "Rack", description: "12U" };\nreturn <Scene {...props} build={({ scene }) => { scene.add(new THREE.Group()); }} />;'))).toEqual([]);
+  const clash = await messages({ "app.tsx": 'import { Scene, Group } from "three";\nimport * as ui from "@a/ui";\nexport default () => <ui.Card>{String(Scene)}{String(Group)}</ui.Card>;' });
+  expect(clash.some((m) => m.includes(`don't import Scene from "three"`))).toBe(true);
+});
+
+test("what a page only says about three.js sets nothing off: prose, strings, comments, its own names", async () => {
+  // A TSX page that talks about the things a Scene owns, and has a class of its own called a loader.
+  const talk = `const note = "we don't use requestAnimationFrame or a WebGLRenderer";
+  const more = \`no PerspectiveCamera, no TextureLoader, built with THREE.js\`;
+  // THREE.Geometry is gone; THREE.js scene for the rack
+  /* new THREE.WebGLRenderer() would be refused */
+  class DataLoader { load() { return 1; } }
+  const first = /["'\/]WebGLRenderer/.test(note) ? new DataLoader().load() : 0;
+  return <div><p>Image notes: ImageLoader, OrbitControls, WebGLRenderer {first}</p><Scene title="WebGLRenderer notes" description={more} build={({ scene }) => { scene.add(new THREE.Group()); }} /></div>;`;
+  expect(await messages(sceneApp(talk))).toEqual([]);
+  // The same in MDX, where prose is most of the page.
+  const mdx = 'import * as THREE from "three";\n\n# Notes\n\nWe don\'t create a WebGLRenderer here (a "PerspectiveCamera" neither), and THREE.js draws it.\n\n<Scene title="Box" description="A box." build={({ scene }) => { scene.add(new THREE.Group()); }} />\n';
+  expect(await messages({ "index.mdx": mdx })).toEqual([]);
+  // A type is not a use.
+  expect(await messages(sceneApp(SCENE_OK, `${SCENE_HEAD}\nimport type { WebGLRenderer } from "three";\nconst keep = (r?: THREE.WebGLRenderer | WebGLRenderer) => r;`))).toEqual([]);
+});
+
+test("real uses are still caught beside text that mentions them", async () => {
+  // An apostrophe in one template and one in another used to pair up and hide the code between them.
+  const hidden = await messages(sceneApp("const a = `it's`; const b = THREE.Geometry; const c = `it's`;\n" + SCENE_OK));
+  expect(hidden).toEqual(["THREE.Geometry doesn't exist in three.js r187."]);
+  const inTemplate = await messages(sceneApp("const s = `${new THREE.WebGLRenderer()} and ${THREE.Geometri}`;\n" + SCENE_OK));
+  expect(inTemplate.some((m) => m.includes("THREE.Geometri doesn't exist"))).toBe(true);
+  expect(inTemplate.some((m) => m.includes("owns the renderer"))).toBe(true);
+  // Names taken out of the namespace are held to it too.
+  const taken = await messages(sceneApp("const { Mesh, Geometry, BoxGeometry: Box } = THREE;\n" + SCENE_OK));
+  expect(taken).toEqual(["THREE.Geometry doesn't exist in three.js r187."]);
+  // three's own loader is named; three has no default export.
+  expect((await messages(sceneApp("new THREE.ObjectLoader();\n" + SCENE_OK)))[0]).toStartWith("ObjectLoader fetches files");
+  const whole = await messages(sceneApp(SCENE_OK.replace(/THREE/g, "T3"), 'import T3 from "three";\nimport { Scene } from "@a/ui";'));
+  expect(whole).toEqual(['three has no default export, so T3 would be undefined: write import * as T3 from "three"']);
+});
+
+test("a Scene's own mistakes name their file: a view that doesn't exist, three's Scene imported over the kit's", async () => {
+  const r = await buildArtifact({ "index.mdx": 'import Box from "./box";\n\n<Box />\n', "box.tsx": sceneApp('return <Scene title="A" description="B" view="iso" build={({ scene }) => { scene.add(new THREE.Group()); }} />;')["app.tsx"] });
+  expect(r.errors).toEqual([{ path: "box.tsx", message: '<Scene view="iso">: view is one of "angle", "front", "side", "top"' }]);
+  const untitled = await buildArtifact({ "index.mdx": 'import Box from "./box";\n\n<Box />\n', "box.tsx": sceneApp('return <Scene title="A" build={({ scene }) => { scene.add(new THREE.Group()); }} />;')["app.tsx"] });
+  expect(untitled.errors.map((e) => e.path)).toEqual(["box.tsx"]);
+  // One error, about the import: not also "no <Scene> draws with it".
+  const clash = await messages({ "app.tsx": 'import { Scene, Group } from "three";\nexport default () => <Scene title="A" description="B" build={({ scene }) => { scene.add(new Group()); }} />;' });
+  expect(clash).toEqual([`don't import Scene from "three": build() is given the scene, and <Scene> is the kit's. Write import * as THREE from "three"`]);
+});
+
+test("bareCode keeps what runs and drops what is only said", () => {
+  const cases: [string, string][] = [
+    ['const a = "THREE.Geometry"; // THREE.Geometry\nconst b = THREE.Mesh;', 'const a = ""; \nconst b = THREE.Mesh;'],
+    ["const s = `a ${THREE.Foo + `x ${y}`} b`;", "const s = `${THREE.Foo + `${y}`}`;"],
+    ['const g = "/*"; f(); /* x */ g()', 'const g = ""; f();   g()'],
+    ['const u = "a // b"; f()', 'const u = ""; f()'],
+    ["const r = /[\"'/]x/g.test(s) ? a / b : c / d; t('x')", 'const r = / /g.test(s) ? a / b : c / d; t("")'],
+    ["x = a / 2; y = b / c; // d", "x = a / 2; y = b / c; "],
+    ["const o = `${{ a: `}` }.a}` + X", "const o = `${{ a: `` }.a}` + X"],
+    ["const q = 'unterminated\nconst z = 1", 'const q = ""const z = 1'],
+  ];
+  for (const [input, want] of cases) expect(bareCode(input)).toBe(want);
+});
+
+test("THREE.<name> is held to the pinned three.js revision, with the nearest real name", async () => {
+  const gone = await messages(sceneApp('return <Scene title="A" description="B" build={({ scene }) => { scene.add(new THREE.Mesh(new THREE.Geometry(), new THREE.MeshLamberMaterial())); }} />;'));
+  expect(gone).toHaveLength(2);
+  expect(gone[0]).toMatch(/^THREE\.Geometry doesn't exist in three\.js r\d+\./);
+  expect(gone[1]).toContain("THREE.MeshLamberMaterial doesn't exist");
+  expect(gone[1]).toContain("Did you mean MeshLambertMaterial?");
+  // Named imports go through the same list; text in a string names nothing.
+  expect((await messages(sceneApp(SCENE_OK, 'import { BoxGeometri } from "three";\nimport * as THREE from "three";\nimport { Scene } from "@a/ui";')))[0]).toContain('"BoxGeometri" is not exported by three. Did you mean BoxGeometry?');
+  expect(await messages(sceneApp('return <Scene title="A" description="Made with THREE.js" build={({ scene, label }) => { scene.add(new THREE.Group()); label("THREE.js", [0, 0, 0]); }} />;'))).toEqual([]);
 });

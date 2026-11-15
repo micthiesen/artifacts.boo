@@ -1,6 +1,6 @@
 # Artifact kit reference
 
-An artifact has one entry: `index.mdx` / `index.md` (a readable report) or `app.tsx` (a full-height app, `export default function App()`). Other `*.tsx` files import by relative path; `data/*.json` files load with `useData("x.json")` or a component's `data="x.json"`. Allowed imports: `react`, `@a/ui`, `@a/hooks`, `lucide-react`, `recharts`, relative files. MDX gets every `@a/ui` component and styled markdown with no imports. There is no network: no fetch, no external images or fonts (use `data:` URLs).
+An artifact has one entry: `index.mdx` / `index.md` (a readable report) or `app.tsx` (a full-height app, `export default function App()`). Other `*.tsx` files import by relative path; `data/*.json` files load with `useData("x.json")` or a component's `data="x.json"`. Allowed imports: `react`, `@a/ui`, `@a/hooks`, `lucide-react`, `recharts`, `three` (inside a `Scene` only), relative files. MDX gets every `@a/ui` component and styled markdown with no imports. There is no network: no fetch, no external images or fonts (use `data:` URLs).
 - `useAsset(path)` → URL of a file uploaded with artifact_asset (e.g. `"assets/logo.png"`); MDX images (`![alt](assets/logo.png)`) resolve automatically.
 
 Every markdown page also gets, with nothing to add: a collapsed **Contents** list under the title once it has four or more `##` sections; live, shared checkboxes for task lists (`- [ ] Buy filters`), ticked by people on the page; a **Linked from** footer listing artifacts here that link to it; and section links that work from anywhere (`/a/<id>#<heading-slug>` or `#<element-id>`). A heading's slug is its text lowercased, with runs of other characters turned into single hyphens (`## Bread & butter` → `#bread-butter`); a repeated heading gets `-2`, `-3`. Link between artifacts with their URL (`/a/<id>`); there are no folders, so a hub page that links to the rest is how to group them.
@@ -49,6 +49,18 @@ Diagrams (Mermaid; the only way to draw anything that isn't a `Chart`)
 - To walk a reader through a flow in order: `Diagram({code, title?, steps: [{focus: "A B", title?, text}]})` draws it once with a step bar ("Step 2 of 5", Previous / All / Next, the step's title and text); each step lights its nodes and the edges between them. Every focus id must exist in the diagram. Use it for 3 to 6 parts worth explaining in order, instead of several near-identical diagrams. When the parts hold values that change as it goes (a counter, a cookie, a row count), give a step `state: {"Auth.attempts": "1"}`: the bar lists every value so far under the step's text, with what this step changed struck through before its new value, so readers don't have to remember them. Keys are a node id, a dot, then a name; values stay short (40 characters, 12 values per diagram).
 - Pick the type by the shape of the thing: `sequenceDiagram` for request flows (who calls whom, in order), `gantt` for timed plans and critical paths, `kanban` for open / waiting / done, `stateDiagram-v2` for lifecycles, `sankey` for funnels and splits. Readers are on phones: collapse a big flowchart's detail into groups (`subgraph auth[Auth] … end`, then `auth@{ view: collapsed }`), and never fan 10 or more nodes out of one node.
 - A few changed lines of code: a ```` ```diff ```` fence, or `Diff({code, file?, notes?})` in TSX. Lines start with `+`, `-` or a space, as `git diff` prints them. `notes: [{at, text}]` explains a line the reader would stop at: `at` is `"L3"` or `"L3-L5"` (counting the lines shown from 1, `@@` lines included) or a name such as `"validateInput"`, underlined wherever it appears. Each note gets a number in the gutter and is listed under the lines; up to 6, a sentence each, with `backticks` for code. A note on a missing line or name fails the check.
+
+Scenes (three.js r187; the only way to draw in 3D, and only for things with a shape in space)
+- `Scene({title, description, build, deps?, view?: "angle"|"front"|"side"|"top", height?: 320})`: a card with a picture the reader can turn (a mouse drags it; on a phone a tap first, so a finger still scrolls the page), buttons for the four sides, zoom, and the description shown underneath. `title` and `description` are required (a save refuses a Scene without them): the description says what is there and what to notice, for someone who can't see or turn it, and Listen reads it.
+- `build({scene, solid, label, colors})` adds plain three.js objects to `scene`. It runs once, and again when a value in `deps` changes. y is up; any unit works, because the camera frames whatever you build.
+  - `solid(geometry, color?)` returns a matte mesh with its edges drawn, which is the kit's look: set its `position` and `scene.add` it. Your own meshes, lines, points and materials work too.
+  - `label(text, at)` puts a short name (a word or two) over a place (`[x, y, z]` or a `Vector3`) or on top of an object, with a line to it; labels move apart rather than cover each other. At most 12.
+  - `colors` are the theme's colours as `THREE.Color`: `surface` (the default grey), `edge`, `text` (the lightest), `muted`, `line` (the darkest that still shows: floors, grids), `positive`, `caution`, `negative`, and `series[0]` to `series[5]` for telling parts apart. Never near-black: the card is dark. Colour doesn't carry meaning alone: label the part, and say what it means in the description (labels aren't read aloud).
+- Write a scene in its own `.tsx` module with `import * as THREE from "three"` and `import { Scene } from "@a/ui"`; in MDX, `import Rack from "./rack"` and then `<Rack />`. Only `three` itself can be imported, no addons.
+- The kit owns the renderer, camera, lights (add your own and the kit's step aside), controls and labels. A save refuses scene code that creates a renderer or a camera, calls `requestAnimationFrame`, adds controls or uses a loader (there is no network), and any `THREE.` name this three.js doesn't have, with the nearest real one.
+- Nothing in a scene moves by itself: there is no frame loop, and the camera only turns when the reader turns it or picks a side. To show something changing, keep it in state and pass `deps={[width]}`: `build` runs again when a value in `deps` changes, and the camera stays where the reader left it.
+- Use one when turning the thing shows what a flat picture can't: whether a desk fits a room, where parts sit in a rack or an enclosure, how a route climbs. Numbers go in a `Chart` (3D bars and pies read worse), flows and structure in Mermaid. One or two scenes a page; each loads three.js (about 190 KB) and holds a 3D canvas.
+- Keep it light: the render check fails a scene over 500,000 triangles or 1,000 draw calls (draw many copies with one `InstancedMesh`), one whose first view shows nothing, one with a position that isn't a number, and one too dark to see. A scene folded away in a closed section is checked too; one in a tab that isn't open isn't on the page until it is opened, so the check can't see it: keep scenes out of tabs. Its screenshot shows four views of every scene, the reader's first: check all four.
 
 Primitives
 - `Button({variant?: default|secondary|outline|ghost|destructive|link, size?: sm|default|lg|icon|icon-sm})`
@@ -166,6 +178,38 @@ export default function App() {
         </CardContent>
       </Card>
     </div>
+  );
+}
+```
+
+
+## Example: a scene, `rack.tsx` (used from `index.mdx` as `import Rack from "./rack"` and `<Rack />`)
+
+```tsx
+import * as THREE from "three";
+import { Scene } from "@a/ui";
+
+const UNITS = [
+  { name: "UPS", at: 0, size: 2 },
+  { name: "NAS", at: 2, size: 4 },
+  { name: "Switch", at: 10, size: 1 },
+];
+
+export default function Rack() {
+  return (
+    <Scene
+      title="Home rack, 12U"
+      description="The UPS sits at the bottom with the NAS above it; the switch is near the top and units 7 to 10 are free."
+      build={({ scene, solid, label, colors }) => {
+        const U = 0.0445; // metres
+        UNITS.forEach((unit, i) => {
+          const box = solid(new THREE.BoxGeometry(0.44, unit.size * U - 0.004, 0.5), colors.series[i]);
+          box.position.y = (unit.at + unit.size / 2) * U;
+          scene.add(box);
+          label(unit.name, box);
+        });
+      }}
+    />
   );
 }
 ```

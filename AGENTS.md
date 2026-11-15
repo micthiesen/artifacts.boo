@@ -42,6 +42,11 @@ white for the agent (the ghost), iris (`--primary`) for you, aqua
   area fade are the only gradients. Chart series colours carry no meaning
   about who; they are just series. The shine on a person's ghost is a drawn crescent, not a
   gradient.
+- The kit's look for a `<Scene>` (three.js, `src/kit/ui/scene-impl.tsx`) is
+  matte surfaces with their edges drawn (`solid()`), in neutral tones and
+  the series hues (`colors`): the shading a light gives a surface is the one
+  other gradient. Its `colors` leave out moon, iris and aqua, which say
+  whose something is.
 - Fraunces (`--font-display`, soft terminals) is for page and section
   headings and the wordmark only. Controls, labels, tables and numbers stay
   Inter.
@@ -75,6 +80,9 @@ check new UI against them.
   pseudo-element, not by enlarging what you see. Checkboxes come with
   clickable text.
 - Presses get a colour change on `:active`, never movement.
+- A scene never takes a finger it wasn't given. Touch scrolls the page until
+  the reader taps the scene (which then shows Done and a ring), a plain wheel
+  scrolls past it, and its view and zoom buttons work without dragging.
 
 **Keys.** Vim-style keys are on by default and invisible until used
 (`src/shared/keys.ts` has the keymap and the rules; `src/kit/keys.ts` is the
@@ -163,6 +171,10 @@ where a test can catch them; keep the rest by hand.
 - Third-party components bring their own animation defaults: switch them
   off or set them to the tokens (Recharts charts run with
   `isAnimationActive={false}`).
+- A `<Scene>` has no frame loop. It draws when the reader turns it or its
+  data changes, and a save refuses artifact code that starts one. Picking a
+  view with a pointer turns the camera there over `--motion-slow`
+  (`motionEase()` gives code the curve CSS would use); keys jump.
 
 **One scale.** Durations and curves are the `--motion-*` tokens in
 `src/kit/theme.css`, mirrored in `src/shell/shell.css`:

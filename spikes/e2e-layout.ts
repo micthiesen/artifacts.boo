@@ -7,7 +7,9 @@ await setup();
 const guest = `guest-${slug}@example.com`;
 const long = "A deliberately long title that keeps going to see whether it wraps on a phone screen";
 const files = {
-  "index.mdx": `# ${long}\n\n<Summary>Wide things below.</Summary>\n\n<Approval id="go" title="${long}" approvers={["${guest}"]} />\n\n<Form id="f" fields={[{ name: "team", label: "Team", type: "select", options: ["${long}"] }]} />\n`,
+  "index.mdx": `import Box from "./box";\n\n# ${long}\n\n<Summary>Wide things below.</Summary>\n\n<Approval id="go" title="${long}" approvers={["${guest}"]} />\n\n<Form id="f" fields={[{ name: "team", label: "Team", type: "select", options: ["${long}"] }]} />\n\n<Box />\n`,
+  // A scene whose title, description and label are all too long for a phone.
+  "box.tsx": `import * as THREE from "three";\nimport { Scene } from "@a/ui";\nexport default () => <Scene title="${long}" description="${long}" build={({ scene, solid, label }) => { const box = solid(new THREE.BoxGeometry(3, 1, 1)); scene.add(box); label("${long}", box); }} />;\n`,
 };
 const created = await call("artifact_create", { title: long, description: long, files, share: [{ email: guest, role: "edit" }], notify: false });
 const id = created.structuredContent?.id as string;

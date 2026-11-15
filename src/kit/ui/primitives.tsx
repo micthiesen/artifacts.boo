@@ -38,6 +38,8 @@ export function buttonClass(variant: keyof typeof buttonVariants = "default", si
   return cn(
     "inline-flex shrink-0 cursor-pointer items-center justify-center font-medium whitespace-nowrap transition-colors select-none",
     "outline-none focus-visible:focus-halo",
+    // A pressed toggle (Before / Both / After, a scene's views): the fill alone is about 1.2:1 against the card.
+    "aria-pressed:border-primary",
     "disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
     buttonSizes[size],
     buttonVariants[variant],

@@ -102,6 +102,26 @@ describe("motion tokens", () => {
   });
 });
 
+describe("scenes", () => {
+  test("a scene draws when something changes: no frame loop, and its one camera move runs on the tokens", () => {
+    const scene = stripTs(read("src/kit/ui/scene-impl.tsx"));
+    expect(scene).not.toMatch(/setAnimationLoop|setInterval/);
+    // Its frames are one coalesced redraw and the turn to a view, which ends.
+    expect(scene).toMatch(/instant \? 0 : motionMs\("slow"\)/);
+    expect(scene).toMatch(/motionEase\(\)/);
+    expect(scene).toMatch(/if \(t < 1\) tween\.current = requestAnimationFrame\(step\)/);
+  });
+
+  test("the catalog and the save check name the three.js revision that is pinned", () => {
+    const version = JSON.parse(read("package.json")).dependencies.three as string;
+    // Exact: saved artifacts call three.js directly, so it moves only on purpose (the maintain skill says how).
+    expect(version).toMatch(/^0\.\d+\.\d+$/);
+    const revision = version.split(".")[1];
+    expect(read("src/kit/CATALOG.md")).toContain(`three.js r${revision};`);
+    expect(JSON.parse(read("src/worker/kit-exports.json")).threeRevision).toBe(revision);
+  });
+});
+
 describe("sound", () => {
   const sources = files("src", /\.(tsx?|js|mjs|html)$/).map((path) => ({ path, text: stripTs(read(path)) }));
 

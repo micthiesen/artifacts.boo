@@ -30,6 +30,7 @@ function kitImports(version: string): Record<string, string> {
     "@a/hooks": kit("hooks.js", version),
     "lucide-react": kit("lucide.js", version),
     recharts: kit("recharts.js", version),
+    three: kit("three.js", version),
   };
 }
 

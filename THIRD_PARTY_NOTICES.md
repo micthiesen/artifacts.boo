@@ -23,6 +23,7 @@ No code from React Bits or Aceternity UI is used.
 | lucide-react | ISC, Copyright (c) Lucide Contributors; portions MIT, Copyright (c) Cole Bemis (Feather) |
 | recharts (and its d3-* / redux dependencies) | MIT, Copyright (c) Recharts Group; d3 modules ISC, Copyright Mike Bostock |
 | pele | MIT, Copyright (c) kepano |
+| three | MIT, Copyright (c) 2010-2026 three.js authors |
 | clsx | MIT, Copyright (c) Luke Edwards |
 | tailwind-merge | MIT, Copyright (c) Dany Castillo |
 | tailwindcss (compiled CSS, preflight) | MIT, Copyright (c) Tailwind Labs, Inc. |

@@ -69,3 +69,26 @@ export function motionMs(token: "fast" | "base" | "slow"): number {
   const raw = getComputedStyle(document.documentElement).getPropertyValue(`--motion-${token}`).trim();
   return raw.endsWith("ms") ? parseFloat(raw) : raw.endsWith("s") ? parseFloat(raw) * 1000 : 0;
 }
+
+/**
+ * The --motion-ease curve as a function of progress (0 to 1), for the few motions CSS can't run (a camera
+ * turning inside a canvas). Reads the token, so there is still one curve.
+ */
+export function motionEase(): (t: number) => number {
+  const raw = typeof getComputedStyle === "undefined" ? "" : getComputedStyle(document.documentElement).getPropertyValue("--motion-ease");
+  const p = /cubic-bezier\(\s*([\d.-]+)\s*,\s*([\d.-]+)\s*,\s*([\d.-]+)\s*,\s*([\d.-]+)\s*\)/.exec(raw)?.slice(1).map(Number) ?? [0.2, 0.8, 0.2, 1];
+  const [x1, y1, x2, y2] = p as [number, number, number, number];
+  const at = (a: number, b: number, s: number) => 3 * (1 - s) * (1 - s) * s * a + 3 * (1 - s) * s * s * b + s * s * s;
+  return (t) => {
+    if (t <= 0 || t >= 1) return Math.min(1, Math.max(0, t));
+    // The curve gives x and y for a parameter s; find the s whose x is t.
+    let lo = 0;
+    let hi = 1;
+    for (let k = 0; k < 24; k++) {
+      const mid = (lo + hi) / 2;
+      if (at(x1, x2, mid) < t) lo = mid;
+      else hi = mid;
+    }
+    return at(y1, y2, (lo + hi) / 2);
+  };
+}

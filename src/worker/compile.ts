@@ -26,6 +26,7 @@ export const ALLOWED_IMPORTS = new Set([
   "@a/hooks",
   "lucide-react",
   "recharts",
+  "three",
 ]);
 
 export type CompileError = { path: string; message: string; line?: number };
@@ -86,7 +87,9 @@ export async function compileFile(
     } else if (!ALLOWED_IMPORTS.has(spec)) {
       errors.push({
         path,
-        message: `import "${spec}" is not available. Allowed: ${[...ALLOWED_IMPORTS].join(", ")} and relative files`,
+        message: spec.startsWith("three/")
+          ? `import "${spec}" is not available: only "three" itself is. <Scene> already has the camera, turning, zoom and labels, so don't add controls; build shapes from three's own geometries`
+          : `import "${spec}" is not available. Allowed: ${[...ALLOWED_IMPORTS].join(", ")} and relative files`,
       });
     }
   }
@@ -115,11 +118,105 @@ function checkNames(path: string, code: string): CompileError[] {
       errors.push({ path, message: `"${name}" is not exported by ${imp.spec}.${suggest(name, exported)}` });
     }
   }
+  errors.push(...threeNames(path, code));
   if (path.endsWith(".mdx") || path.endsWith(".md")) {
     for (const m of code.matchAll(/_missingMdxReference\("([^"]+)"/g)) {
       const name = m[1].split(".")[0];
       if (!/^[A-Z]/.test(name) || MDX_COMPONENTS.has(name) || declaredInModule(code, name)) continue;
       errors.push({ path, message: `<${name}> is not a kit component.${suggest(name, MDX_COMPONENTS)} See artifact_guide for the list.` });
+    }
+  }
+  return errors;
+}
+
+/**
+ * JavaScript with what only mentions things taken out: comments removed, and the text of string, template and
+ * regular-expression literals blanked (a template's ${…} expressions stay, as code). What is left is what runs,
+ * so a check on names isn't set off by prose, a label or a note to self.
+ */
+export function bareCode(js: string): string {
+  let out = "";
+  let i = 0;
+  // Where a `/` starts a regular expression rather than dividing: after an operator, an opening bracket or nothing.
+  const regexAllowed = () => /(?:^|[=(,:;!&|?{}[+\-*%<>~^]|\breturn|\btypeof|\bcase|\bin|\bof|\bvoid|\bdelete|\bthrow|\bnew|=>)\s*$/.test(out.slice(-12));
+  const code = (until?: string): void => {
+    let depth = 0;
+    while (i < js.length) {
+      const ch = js[i]!;
+      const next = js[i + 1];
+      if (until && depth === 0 && ch === until) return;
+      if (ch === "/" && next === "/") {
+        while (i < js.length && js[i] !== "\n") i++;
+      } else if (ch === "/" && next === "*") {
+        const close = js.indexOf("*/", i + 2);
+        i = close < 0 ? js.length : close + 2;
+        out += " ";
+      } else if (ch === '"' || ch === "'") {
+        i++;
+        while (i < js.length && js[i] !== ch && js[i] !== "\n") i += js[i] === "\\" ? 2 : 1;
+        i++;
+        out += '""';
+      } else if (ch === "`") {
+        i++;
+        out += "`";
+        while (i < js.length && js[i] !== "`") {
+          if (js[i] === "\\") i += 2;
+          else if (js[i] === "$" && js[i + 1] === "{") {
+            i += 2;
+            out += "${";
+            code("}");
+            i++;
+            out += "}";
+          } else i++;
+        }
+        i++;
+        out += "`";
+      } else if (ch === "/" && regexAllowed()) {
+        i++;
+        for (let inClass = false; i < js.length && js[i] !== "\n" && (inClass || js[i] !== "/"); i++) {
+          if (js[i] === "\\") i++;
+          else if (js[i] === "[") inClass = true;
+          else if (js[i] === "]") inClass = false;
+        }
+        i++;
+        out += "/ /";
+      } else {
+        if (until) depth += ch === "{" ? 1 : ch === "}" ? -1 : 0;
+        out += ch;
+        i++;
+      }
+    }
+  };
+  code();
+  return out;
+}
+
+/**
+ * `import * as THREE from "three"` hides its names from the check above, and three.js is where a name is most
+ * likely to be out of date (it renames and removes classes between releases): THREE.Geometry saves fine and then
+ * throws in the reader's browser. So every THREE.<name>, and every name taken out of it with
+ * `const { … } = THREE`, is held to the pinned revision's exports.
+ */
+function threeNames(path: string, code: string): CompileError[] {
+  const exported = MODULE_EXPORTS.three;
+  if (!exported) return [];
+  const errors: CompileError[] = [];
+  let bare: string | undefined;
+  for (const imp of lexImports(code)) {
+    if (imp.spec !== "three" || imp.ss < 0 || imp.se <= imp.ss) continue;
+    const statement = code.slice(imp.ss, imp.se);
+    const whole = /^import\s+([\w$]+)\s*(?:,|from\b)/.exec(statement)?.[1];
+    if (whole) errors.push({ path, message: `three has no default export, so ${whole} would be undefined: write import * as ${whole} from "three"` });
+    const space = /\*\s*as\s+([\w$]+)/.exec(statement)?.[1];
+    if (!space) continue;
+    bare ??= bareCode(code);
+    const ns = space.replace(/\$/g, "\\$");
+    const used = [...bare.matchAll(new RegExp(`(?<![\\w$.])${ns}\\.([A-Za-z_$][\\w$]*)`, "g"))].map((m) => m[1]!);
+    for (const m of bare.matchAll(new RegExp(`\\b(?:const|let|var)\\s*\\{([^}]*)\\}\\s*=\\s*${ns}(?![\\w$.])`, "g"))) {
+      used.push(...m[1]!.split(",").map((part) => part.split(/[:=]/)[0]!.trim()).filter((name) => /^[A-Za-z_$][\w$]*$/.test(name)));
+    }
+    for (const name of new Set(used)) {
+      if (!exported.has(name)) errors.push({ path, message: `${space}.${name} doesn't exist in three.js r${kitExports.threeRevision}.${suggest(name, exported)}` });
     }
   }
   return errors;
@@ -339,6 +436,7 @@ export async function buildArtifact(files: Record<string, string>): Promise<{ bu
   const imports: Record<string, string> = {};
   const data: Record<string, JsonValue> = {};
   const candidates = new Set<string>();
+  const compiled: Record<string, string> = {};
   let blocks: BlockInfo[] = [];
   for (const path of paths) {
     if (path.startsWith("data/")) {
@@ -354,12 +452,14 @@ export async function buildArtifact(files: Record<string, string>): Promise<{ bu
     if (!result.module) continue;
     for (const c of result.module.classes) candidates.add(c);
     if (path === entries[0] && result.module.blocks) blocks = result.module.blocks;
+    compiled[path] = result.module.code;
     const code = await rewriteRelativeImports(path, result.module.code, pathSet);
     imports[ART_PREFIX + path] = `data:text/javascript;base64,${toBase64(code)}`;
   }
   errors.push(...(await changeGuideErrors(files, data)));
   errors.push(...shortlistErrors(files, data));
   errors.push(...decisionErrors(files));
+  errors.push(...sceneErrors(files, compiled));
   errors.push(...logoErrors(files));
   errors.push(...(await findingsErrors(files, data)));
   const sources = sourcesErrors(files, data);
@@ -491,6 +591,56 @@ function decisionErrors(files: Record<string, string>): CompileError[] {
     // At least one email, or nobody could ever decide (and the page would say it's waiting).
     if (!list || !/["'][^"'\s]+@[^"'\s]+["']/.test(list[1]!)) {
       errors.push({ path: "", message: `<Decision deciders> must list emails literally, like deciders={["sam@example.com"]}: the server reads them from the page to decide who may answer` });
+    }
+  }
+  return errors;
+}
+
+/** What <Scene> owns, so scene code that brings its own is refused with what to do instead. */
+const SCENE_OWNS: [RegExp, string][] = [
+  [/\bWebGL\d?Renderer\b|\bWebGPURenderer\b/, "<Scene> owns the renderer and its canvas: don't create one. Add objects to the `scene` that build() is given"],
+  [/\b(?:Perspective|Orthographic)Camera\b/, '<Scene> frames its own camera on whatever you build: don\'t create one. Pick the side shown first with view="angle" | "front" | "side" | "top"'],
+  [/\brequestAnimationFrame\b|\bsetAnimationLoop\b/, "a scene has no frame loop: <Scene> draws when the reader turns it or its deps change. To show a change, rebuild from state with deps={[…]}"],
+];
+const SCENE_VIEWS = ["angle", "front", "side", "top"];
+
+/**
+ * three.js is only for drawing inside a <Scene>, which owns everything that can hurt a reader (a canvas that
+ * traps a phone's scroll, a loop that drains a battery, a scene nothing can read aloud). So code that imports
+ * three without one, or builds its own renderer, camera, loop or loader, isn't saved; nor is a Scene without
+ * the title and description that stand in for it. `compiled` is each file as it will run: what a file only
+ * says, in prose, a string or a comment, sets nothing off.
+ */
+function sceneErrors(files: Record<string, string>, compiled: Record<string, string>): CompileError[] {
+  const errors: CompileError[] = [];
+  const scenes = Object.keys(files).flatMap((path) => kitTags({ [path]: files[path]! }, "Scene").map((attrs) => ({ path, attrs })));
+  const importing = Object.entries(compiled).flatMap(([path, code]) => {
+    const three = lexImports(code).filter((imp) => imp.spec === "three");
+    return three.length ? [{ path, code, statements: three.map((imp) => (imp.ss >= 0 && imp.se > imp.ss ? code.slice(imp.ss, imp.se) : "")) }] : [];
+  });
+  // Both the kit's component and three's class are called Scene; build() is handed three's.
+  const clashes = importing.filter((f) => f.statements.some((st) => /\{[^}]*\bScene\b(?!\s+as\b)[^}]*\}/.test(st)));
+  for (const { path } of clashes) {
+    errors.push({ path, message: `don't import Scene from "three": build() is given the scene, and <Scene> is the kit's. Write import * as THREE from "three"` });
+  }
+  if (importing.length && !scenes.length && !clashes.length) {
+    errors.push({ path: importing[0]!.path, message: `"three" is imported but no <Scene> draws with it. three.js only draws inside the kit's <Scene title="…" description="…" build={({ scene }) => { … }} />` });
+  }
+  for (const { path, code } of importing) {
+    const bare = bareCode(code);
+    for (const [pattern, message] of SCENE_OWNS) if (pattern.test(bare)) errors.push({ path, message });
+    // three's own loaders, not anything that happens to be named one.
+    const loader = [...bare.matchAll(/\b[A-Z]\w*Loader\b/g)].find((m) => MODULE_EXPORTS.three?.has(m[0]));
+    if (loader) errors.push({ path, message: `${loader[0]} fetches files and artifacts have no network: build shapes from three's geometries (a CanvasTexture works for a texture you draw)` });
+  }
+  for (const { path, attrs } of scenes) {
+    const view = literalProp(attrs, "view");
+    if (view && !SCENE_VIEWS.includes(view)) errors.push({ path, message: `<Scene view="${view}">: view is one of ${SCENE_VIEWS.map((v) => `"${v}"`).join(", ")}` });
+    // Props passed in a spread can't be read here; the component itself refuses to draw without them.
+    if (/\{\s*\.\.\./.test(attrs)) continue;
+    const missing = ["title", "description"].filter((name) => !new RegExp(`(?<![\\w-])${name}=`).test(attrs) || new RegExp(`(?<![\\w-])${name}=\\{?\\s*(""|'')`).test(attrs));
+    if (missing.length) {
+      errors.push({ path, message: `<Scene> needs a ${missing.join(" and a ")} (title="…" description="…"): they are what is read aloud, and all that someone who can't see the scene gets` });
     }
   }
   return errors;
@@ -700,7 +850,7 @@ function fnv1a(text: string): string {
   return (h >>> 0).toString(36);
 }
 
-async function rewriteRelativeImports(from: string, code: string, files: Set<string>): Promise<string> {
+export async function rewriteRelativeImports(from: string, code: string, files: Set<string>): Promise<string> {
   await initLexer;
   let out = "";
   let last = 0;
