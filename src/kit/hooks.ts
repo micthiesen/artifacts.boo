@@ -1,6 +1,7 @@
 // @a/hooks: React bindings over the frame store.
 import { useCallback, useMemo, useSyncExternalStore } from "react";
-import type { JsonValue, Role } from "../shared/protocol.ts";
+import { ANCHOR_TARGET_MAX, type JsonValue, type Role } from "../shared/protocol.ts";
+import { commentOnTarget, TARGET_ATTR, TARGET_LABEL_ATTR } from "./annotate.ts";
 import * as store from "./store.ts";
 
 type SetStateAction<T> = T | ((prev: T) => T);
@@ -121,4 +122,36 @@ export function canWrite(): boolean {
 
 export function useCanWrite(): boolean {
   return useViewer().canWrite;
+}
+
+export type CommentTarget = {
+  /** Spread on the item's element: these attributes are what make it a comment target. */
+  props: { [TARGET_ATTR]: string; [TARGET_LABEL_ATTR]?: string };
+  /** Open threads on this item. */
+  count: number;
+  /** False for anonymous viewers, who can read threads but not start one. */
+  canComment: boolean;
+  /** Opens the item's thread in the comments drawer, or starts one when it has none. */
+  comment(): void;
+};
+
+/**
+ * Marks an item your component renders (a task, a row, a card) as something readers can comment on.
+ * `id` is yours to choose and must stay the same for the same item: threads are kept by it, so they
+ * follow the item when the list is reordered or its text changes. `label` is the short name shown
+ * with the thread and to agents (default: the item's text).
+ */
+export function useCommentTarget(id: string, label?: string): CommentTarget {
+  if (id.length > ANCHOR_TARGET_MAX) store.warnOnce(`target:${id}`, `comment target id is over ${ANCHOR_TARGET_MAX} characters, so comments on it are refused: ${id.slice(0, 40)}…`);
+  const info = useSyncExternalStore(store.subscribe, store.getComments);
+  const count = info.counts[id] ?? 0;
+  return useMemo(
+    () => ({
+      props: { [TARGET_ATTR]: id, ...(label ? { [TARGET_LABEL_ATTR]: label } : {}) },
+      count,
+      canComment: info.canComment,
+      comment: () => commentOnTarget(id),
+    }),
+    [id, label, count, info.canComment],
+  );
 }

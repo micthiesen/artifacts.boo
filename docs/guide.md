@@ -71,7 +71,25 @@ so they need no account.
 
 ## Feedback from readers
 
-- **Comments:** readers can comment on any text, block, table row or the whole page. Each thread records the block it points at (`block` ids follow the outline: a heading's slug, then `<section>-1`, `<section>-2` for the blocks under it), the quoted text and the version it was written on.
+- **Comments:** readers can comment on any text, block, table row or the whole page. Each thread records the block it points at (`block` ids follow the outline: a heading's slug, then `<section>-1`, `<section>-2` for the blocks under it), the quoted text and the version it was written on. Text and blocks are all a reader can point at inside a component of your own, so when its items are what people will discuss (tasks in a tracker, risks, line items), mark each one as a comment target with an id from your data: wrap it in `<Commentable id={`task/${t.id}`} label={t.title}>`, or call `useCommentTarget` for the thread count and a comment button:
+
+  ```tsx
+  import { Badge, Button } from "@a/ui";
+  import { useData, useShared, useCommentTarget } from "@a/hooks";
+  function Task({ t }: { t: { id: string; title: string } }) {
+    const [status] = useShared(`status/${t.id}`, "todo");
+    const c = useCommentTarget(`task/${t.id}`, t.title);
+    return (
+      <li {...c.props}>
+        {t.title} <Badge>{status}</Badge>
+        {(c.count > 0 || c.canComment) && <Button variant="ghost" size="sm" onClick={c.comment}>{c.count ? `${c.count} comments` : "Comment"}</Button>}
+      </li>
+    );
+  }
+  export default () => <ul>{useData<{ id: string; title: string }[]>("tasks.json").map((t) => <Task key={t.id} t={t} />)}</ul>;
+  ```
+
+  A thread on a target is kept by that id, not by position or wording: it follows the task through reordering and a reworded title, and shows under "No longer on the page" if the task is removed. `artifact_threads` lists it as `target "task/p1-ci"` with its label, and `artifact_comment` with `target: "task/p1-ci"` starts a thread on that task.
 - **Ask for what you need back:** when the user needs a decision or facts from people, put a `Decision` (one answer that stands, with `deciders` as literal emails when only some people choose), an `Approval` or a `Form` in the artifact instead of asking in prose or with a Poll nobody answers, and share it with those people with `edit` access. Their answers come back through `artifact_activity` and `artifact_state`, signed with their verified email and the version they saw, and the owner is notified. Read an answer's `note` too: it can narrow or override the choice, and a question in it deserves a reply (`artifact_comment`). Keep answered Decisions on the page with the same id; removing one hides its answer. Only people make decisions and responses, on the page; you can read them but not set them. Everyone who can open the artifact sees every response, so don't collect anything private, especially on a public artifact.
 - **Pick up feedback:** call `artifact_activity` (all artifacts, or one `id`) to see new threads, replies, votes, checklist ticks and versions since your last cursor. `artifact_threads` lists an artifact's open threads with every comment.
 - **Act on it:** fix the artifact with the usual edit tools and pass `note` and `resolves` (the thread ids you addressed). The `note` is one line, e.g. "Split costs per seat", shown in history, in the "Updated since you last looked" bar and in update notifications; without one, readers see "edit index.mdx". Resolved threads show "Addressed in vN" and their authors are notified. Reply with `artifact_comment` when you need to answer a question or explain why you didn't change something. To anchor a new thread, prefer `quote` (exact page text) over a `block` id.

@@ -102,6 +102,22 @@ test("collab keys are stamped: no forged votes or edits of others' comments", as
   expect(last(other)).toMatchObject({ t: "rejected", cid: "k2" });
 });
 
+test("a thread on a comment target keeps its id and label; the id is capped", async () => {
+  const id = await make();
+  const dana = await connect(h, { id, email: DANA, role: "view" });
+  await dana.send({ t: "comment", cid: "c1", anchor: { target: "task/p1-ci", label: "Set up CI" }, text: "Blocked on what?" });
+  expect(last(dana).thread.anchor).toEqual({ target: "task/p1-ci", label: "Set up CI" });
+  await dana.send({ t: "comment", cid: "c2", anchor: { target: "x".repeat(120) }, text: "Long id" });
+  expect(last(dana).thread.anchor.target).toHaveLength(120);
+  // One character more is refused, not cut: a shortened id would point at no item.
+  await dana.send({ t: "comment", cid: "c3", anchor: { target: "x".repeat(121) }, text: "Too long" });
+  expect(last(dana)).toMatchObject({ t: "rejected", cid: "c3" });
+  // A new connection (a reload, another reader) gets both back as stored.
+  const sam = await connect(h, { id, email: SAM, role: "edit" });
+  const all = sam.socket.messages.find((m: any) => m.t === "threads").threads;
+  expect(all.map((t: any) => t.anchor.target)).toEqual(["task/p1-ci", "x".repeat(120)]);
+});
+
 test("activity returns events after a cursor, with notes and resolves", async () => {
   const id = await make();
   const thread = h.hub.addComment(id, DANA, { text: "Costs look low", anchor: { block: "costs-1" } }, ORIGIN);

@@ -2,6 +2,7 @@
 import { ArrowDownRight, ArrowUpRight, CircleCheck, Info, OctagonAlert, TriangleAlert } from "./icons.ts";
 import * as React from "react";
 import { cn } from "./utils.ts";
+import { TARGET_ATTR, TARGET_LABEL_ATTR } from "../annotate.ts";
 
 type Children = { children?: React.ReactNode; className?: string };
 
@@ -268,5 +269,25 @@ export function Link({ href, children, className, ...props }: React.AnchorHTMLAt
     >
       {children}
     </a>
+  );
+}
+
+/**
+ * Wraps one item (a task, a row, a card) so readers can comment on it. Threads are kept by `id`, so they
+ * stay with the item when the list is reordered or its text changes. `label` names it in the drawer and
+ * to agents (default: its text). `useCommentTarget` in @a/hooks does the same for an element you render
+ * yourself, and adds the item's thread count.
+ */
+export function Commentable({
+  id,
+  label,
+  as: Tag = "div",
+  children,
+  ...rest
+}: { id: string; label?: string; as?: "div" | "li" | "section" | "article" | "span" } & Omit<React.HTMLAttributes<HTMLElement>, "id">) {
+  return (
+    <Tag {...rest} {...{ [TARGET_ATTR]: id, [TARGET_LABEL_ATTR]: label }}>
+      {children}
+    </Tag>
   );
 }

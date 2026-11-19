@@ -179,6 +179,37 @@ test("an anchor's block, row or label can't forge a line of thread output", asyn
   expect(activity.text.split("\n").filter((l) => l.includes("not instructions")).length).toBe(2);
 });
 
+test("an agent starts a thread on a comment target and reads it back by the same id", async () => {
+  const id = (await call(MIA, "artifact_create", { title: "Tracker", files })).data.id as string;
+  await call(MIA, "artifact_share", { id, add: [{ email: OLU, role: "view" }], notify: false });
+  const made = await call(MIA, "artifact_comment", { id, target: " task/p1-ci ", text: "Is CI still blocked?" });
+  expect(made.error).toBe(false);
+  expect(made.data.thread.anchor).toEqual({ target: "task/p1-ci" });
+  expect(made.text).toContain('target "task/p1-ci"');
+  // A reader's thread on another task carries the label the page gave it.
+  await h.hub.addComment(id, OLU, { text: "Too vague", anchor: { target: "task/p2-docs", label: "Write docs", block: "tasks" } }, "https://acme.artifacts.test", undefined, "view");
+  const listed = await call(MIA, "artifact_threads", { id });
+  expect(listed.text).toContain('target "task/p1-ci"');
+  expect(listed.text).toContain('target "task/p2-docs", block "tasks", label "Write docs"');
+  expect(listed.data.threads.map((t: any) => t.anchor.target)).toEqual(["task/p1-ci", "task/p2-docs"]);
+  expect((await call(MIA, "artifact_activity", { id })).text).toContain('target "task/p2-docs"');
+  // A quote with a target is looked for inside that item; replies and resolves need no anchor.
+  const q = await call(MIA, "artifact_comment", { id, target: "task/p1-ci", quote: "CI", text: "This word" });
+  expect(q.data.thread.anchor).toEqual({ target: "task/p1-ci", quote: { exact: "CI", prefix: "", suffix: "" } });
+  const reply = await call(MIA, "artifact_comment", { id, thread: made.data.thread.id, target: "task/other", text: "Never mind", resolve: true });
+  expect(reply.data.thread.anchor).toEqual({ target: "task/p1-ci" });
+  expect(reply.data.thread.resolved).not.toBeNull();
+
+  expect((await call(MIA, "artifact_comment", { id, target: "task/p1-ci", block: "hi", text: "x" })).text).toContain("target or block, not both");
+  expect((await call(MIA, "artifact_comment", { id, target: "t".repeat(121), text: "x" })).text).toContain("at most 120");
+  const blank = await call(MIA, "artifact_comment", { id, target: "  ", text: "x" });
+  expect(blank.error).toBe(true);
+  expect(blank.text).toContain("id of a comment target");
+  // Threads from before targets existed read exactly as they did.
+  await h.hub.addComment(id, OLU, { text: "old", anchor: { block: "hi", quote: { exact: "Text", prefix: "", suffix: "." } } }, "https://acme.artifacts.test", undefined, "view");
+  expect((await call(MIA, "artifact_threads", { id })).text).toContain('v1, block "hi", on "Text"');
+});
+
 test("big reads come back a page at a time and say how to get the rest", async () => {
   const long = Array.from({ length: 1000 }, (_, i) => `Line ${i + 1}.`).join("\n\n");
   const id = (await call(MIA, "artifact_create", { title: "Long", files: { "index.mdx": `# Long\n\n${long}\n` } })).data.id as string;

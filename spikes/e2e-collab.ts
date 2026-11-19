@@ -176,6 +176,33 @@ for (let i = 0; i < 24 && !delivered?.lastError; i++) {
 check("alarm delivered the comment notification", /418/.test(delivered?.lastError ?? ""), delivered);
 await post(`/api/me/channels/${hook.id}`, {}, "DELETE");
 
+// ---- comment targets: items of a component, addressed by an id of their own --------------
+const trackerFiles = {
+  "index.mdx": 'import { Tasks } from "./tasks.tsx";\n\n# Tracker\n\n<Tasks />\n\n<Commentable id="note/scope" label="Scope note">Out of scope for now.</Commentable>\n',
+  "tasks.tsx":
+    'import { useCommentTarget, useData } from "@a/hooks";\nfunction Task({ t }: { t: { id: string; title: string } }) {\n  const c = useCommentTarget(`task/${t.id}`, t.title);\n  return <li {...c.props}>{t.title} <button onClick={c.comment}>{c.count}</button></li>;\n}\nexport function Tasks() {\n  return <ul>{useData<{ id: string; title: string }[]>("tasks.json").map((t) => <Task key={t.id} t={t} />)}</ul>;\n}\n',
+  "data/tasks.json": JSON.stringify([{ id: "p1-ci", title: "Set up CI" }, { id: "p2-docs", title: "Write docs" }]),
+};
+const tracker = await call("artifact_create", { title: "E2E tracker", description: "e2e comment targets", files: trackerFiles, share: [{ email: viewer, role: "view" }] });
+const trackerId = tracker.structuredContent?.id as string;
+let trackerCheck = tracker.structuredContent?.renderCheck;
+for (let i = 0; i < 8 && trackerCheck?.status === "queued"; i++) {
+  await Bun.sleep(6000);
+  trackerCheck = (await call("artifact_check", { id: trackerId, screenshot: false })).structuredContent?.renderCheck;
+}
+check("an artifact using Commentable and useCommentTarget saves and renders", Boolean(trackerId) && trackerCheck?.status === "ok", trackerCheck ?? tracker.content);
+const tv = socket(trackerId, viewerCookie);
+await tv.opened;
+tv.send({ t: "comment", cid: "t1", anchor: { target: "task/p2-docs", label: "Write docs" }, text: "Too vague" });
+const onTask = await tv.next((m) => m.t === "thread" && m.cid === "t1");
+check("a reader's thread keeps its comment target", onTask?.thread?.anchor?.target === "task/p2-docs" && onTask.thread.anchor.label === "Write docs", onTask ?? tv.messages.slice(-3));
+const agentOnTask = await call("artifact_comment", { id: trackerId, target: "task/p1-ci", text: "Is CI still blocked?" });
+check("agent starts a thread on a comment target", agentOnTask.structuredContent?.thread?.anchor?.target === "task/p1-ci", agentOnTask.content);
+const targetThreads = (await call("artifact_threads", { id: trackerId })).content[0].text as string;
+check("artifact_threads names each thread's target and label", targetThreads.includes('target "task/p1-ci"') && targetThreads.includes('target "task/p2-docs", label "Write docs"'), targetThreads);
+tv.ws.close();
+await call("artifact_delete", { id: trackerId });
+
 // ---- cleanup ------------------------------------------------------------------------
 await call("artifact_delete", { id });
 await finish();

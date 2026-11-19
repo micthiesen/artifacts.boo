@@ -1,0 +1,6 @@
+[
+  { "id": "p1-ci", "title": "Set up CI for the monorepo", "owner": "Noor" },
+  { "id": "p1-auth", "title": "Move sign-in to passkeys", "owner": "Grace" },
+  { "id": "p2-docs", "title": "Write the onboarding guide", "owner": "Ada" },
+  { "id": "p2-billing", "title": "Invoice export", "owner": "Lin" }
+]

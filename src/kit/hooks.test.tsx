@@ -135,3 +135,55 @@ describe("useLocal, useViewer, usePresence, useData", () => {
     expect(sent).toEqual([{ t: "local:set", key: "tab", value: "two" }]);
   });
 });
+
+describe("useCommentTarget and Commentable", () => {
+  test("a tracker's items are comment targets with live thread counts, through reorder and reword", async () => {
+    const { installAnnotations, setThreads, locate } = await import("./annotate.ts");
+    const { Commentable } = await import("./ui/layout.tsx");
+    init({ email: "a@x.dev", role: "view" });
+    installAnnotations(container, (m) => sent.push(m));
+    type T = { id: string; title: string };
+    function Task({ t }: { t: T }) {
+      const c = hooks.useCommentTarget(`task/${t.id}`, t.title);
+      return (
+        <li {...c.props}>
+          {t.title}
+          <button onClick={c.comment}>{`${c.count}${c.canComment ? "+" : ""}`}</button>
+        </li>
+      );
+    }
+    const App = ({ tasks }: { tasks: T[] }) => (
+      <ul>
+        {tasks.map((t) => (
+          <Task key={t.id} t={t} />
+        ))}
+        <Commentable as="li" id="note/1" label="A note" className="x">
+          Note
+        </Commentable>
+      </ul>
+    );
+    const root = await render(<App tasks={[{ id: "p1-ci", title: "Set up CI" }, { id: "p2", title: "Docs" }]} />);
+    const li = (id: string) => container.querySelector(`[data-comment-target="${id}"]`) as HTMLElement;
+    expect(li("task/p1-ci").getAttribute("data-comment-label")).toBe("Set up CI");
+    expect(li("note/1").outerHTML).toBe('<li class="x" data-comment-target="note/1" data-comment-label="A note">Note</li>');
+    expect(li("task/p1-ci").querySelector("button")!.textContent).toBe("0");
+
+    await act(async () => setThreads([{ id: "t1", anchor: { target: "task/p1-ci", label: "Set up CI" } }], true));
+    expect(li("task/p1-ci").querySelector("button")!.textContent).toBe("1+");
+    expect(li("task/p2").querySelector("button")!.textContent).toBe("0+");
+    await act(async () => li("task/p2").querySelector("button")!.click());
+    expect(sent.at(-1)).toEqual({ t: "comment:new", anchor: { target: "task/p2", label: "Docs" } });
+    await act(async () => li("task/p1-ci").querySelector("button")!.click());
+    expect(sent.at(-1)).toEqual({ t: "comment:open", thread: "t1" });
+
+    // Reordered and reworded: same id, same thread, same count.
+    await act(async () => root.render(<App tasks={[{ id: "p2", title: "Docs" }, { id: "p1-ci", title: "Continuous integration" }]} />));
+    expect(container.querySelector("li")!.getAttribute("data-comment-target")).toBe("task/p2");
+    expect(li("task/p1-ci").querySelector("button")!.textContent).toBe("1+");
+    expect(locate({ target: "task/p1-ci", label: "Set up CI" })).toMatchObject({ status: "anchored", el: li("task/p1-ci") });
+    // Removed: the thread has nowhere to point, and is reported as orphaned rather than dropped.
+    await act(async () => root.render(<App tasks={[{ id: "p2", title: "Docs" }]} />));
+    expect(locate({ target: "task/p1-ci" }).status).toBe("orphaned");
+    await act(async () => setThreads([], false));
+  });
+});

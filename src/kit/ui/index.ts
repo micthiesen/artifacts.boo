@@ -6,7 +6,7 @@ import { Diff } from "./diff.tsx";
 import { ChangeGuide } from "./change-guide.tsx";
 import { Approval, Checklist, Comments, Form, Notes, Poll } from "./collab.tsx";
 import * as controls from "./controls.tsx";
-import { Callout, Grid, Link, Page, Section, Stack, Stat, Stats, Step, Steps, Summary, Timeline, TimelineItem } from "./layout.tsx";
+import { Callout, Commentable, Grid, Link, Page, Section, Stack, Stat, Stats, Step, Steps, Summary, Timeline, TimelineItem } from "./layout.tsx";
 import { markdownComponents } from "./mdx.tsx";
 import * as primitives from "./primitives.tsx";
 import { Table } from "./table.tsx";
@@ -60,6 +60,7 @@ const kitComponents = {
   Stack,
   Summary,
   Callout,
+  Commentable,
   Stat,
   Stats,
   Steps,

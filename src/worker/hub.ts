@@ -64,6 +64,8 @@ import {
   type RestoreCursor,
 } from "./snapshot.ts";
 import {
+  ANCHOR_LABEL_MAX,
+  ANCHOR_TARGET_MAX,
   SHARED_STATE_MAX_BYTES,
   SHARED_VALUE_MAX_BYTES,
   type Anchor,
@@ -3812,7 +3814,11 @@ function cleanAnchor(anchor: Anchor | null): Anchor | null {
   if (block) out.block = block;
   const row = str(anchor.row, 200);
   if (row) out.row = row;
-  const label = str(anchor.label, 120);
+  // Not cut short like the rest: a shortened id would point at no item.
+  if (typeof anchor.target === "string" && anchor.target.length > ANCHOR_TARGET_MAX) throw new HubError(`a comment target id is at most ${ANCHOR_TARGET_MAX} characters`);
+  const target = str(anchor.target, ANCHOR_TARGET_MAX);
+  if (target) out.target = target;
+  const label = str(anchor.label, ANCHOR_LABEL_MAX);
   if (label) out.label = label;
   const q = anchor.quote;
   if (q && typeof q === "object" && typeof q.exact === "string" && q.exact.trim()) {

@@ -4,9 +4,15 @@
 // markers, and reports clicks. Highlights use the CSS Custom Highlight API,
 // so the artifact's DOM is never modified around the selected text.
 import type { Anchor, AnchorStatus, FrameMessage } from "../shared/protocol.ts";
+import { setComments } from "./store.ts";
 
 type ThreadRef = { id: string; anchor: Anchor | null; active?: boolean };
-type Placed = { id: string; status: AnchorStatus; range: Range | null; el: Element | null };
+type Placed = { id: string; status: AnchorStatus; range: Range | null; el: Element | null; label?: string };
+
+/** An item the artifact's own code marked as a comment target (Commentable, useCommentTarget). */
+export const TARGET_ATTR = "data-comment-target";
+export const TARGET_LABEL_ATTR = "data-comment-label";
+const TARGET = `[${TARGET_ATTR}]`;
 
 const CONTEXT = 32;
 const MAX_QUOTE = 1000;
@@ -40,13 +46,18 @@ export function installAnnotations(rootEl: HTMLElement, transport: (m: FrameMess
   new ResizeObserver(() => scheduleRefresh(100)).observe(rootEl);
   // Re-anchor when the artifact re-renders (data loads, charts mount, shared state changes).
   new MutationObserver((records) => {
-    if (records.some((r) => !isOurs(r.target))) scheduleRefresh(250);
-  }).observe(root, { subtree: true, childList: true, characterData: true });
+    if (records.some((r) => r.type !== "attributes" && !isOurs(r.target))) scheduleRefresh(250);
+    // A component that rewrites its item's class (a done style) takes our mark off with it; put it back.
+    else if (records.some((r) => r.type === "attributes" && placed.some((p) => p.el === r.target && !p.range && !p.el?.classList.contains("art-commented")))) scheduleRefresh(50);
+  }).observe(root, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ["class"] });
 }
 
 export function setThreads(next: ThreadRef[], comment: boolean) {
   threads = next;
   canComment = comment;
+  const counts: Record<string, number> = {};
+  for (const t of next) if (t.anchor?.target) counts[t.anchor.target] = (counts[t.anchor.target] ?? 0) + 1;
+  setComments({ counts, canComment });
   refresh();
 }
 
@@ -106,16 +117,21 @@ function scheduleRefresh(ms: number) {
 
 function refresh() {
   refreshTimer = null;
-  placed = threads.map((t) => ({ id: t.id, ...locate(t.anchor) }));
+  placed = threads.map((t) => {
+    const at = locate(t.anchor);
+    // What the item is called now: the drawer shows this rather than the label saved with the thread.
+    return { id: t.id, ...at, ...(t.anchor?.target && at.el ? { label: targetLabel(at.el) } : {}) };
+  });
   // Document order: by the start of the range or element.
   placed.sort((a, b) => compareNodes(startNode(a), startNode(b)));
   paint();
   // Re-rendered blocks lose their change marks; put them back.
   applyChanged();
-  const report = JSON.stringify(placed.map((p) => [p.id, p.status]));
+  const out = placed.map((p) => ({ id: p.id, status: p.status, ...(p.label ? { label: p.label } : {}) }));
+  const report = JSON.stringify(out);
   if (report !== lastReport) {
     lastReport = report;
-    send({ t: "anchors", placed: placed.map((p) => ({ id: p.id, status: p.status })) });
+    send({ t: "anchors", placed: out });
   }
 }
 
@@ -132,6 +148,14 @@ function compareNodes(a: Node | null, b: Node | null): number {
 /** Find an anchor on the current page. */
 export function locate(anchor: Anchor | null): { status: AnchorStatus; range: Range | null; el: Element | null } {
   if (!anchor) return { status: "anchored", range: null, el: null };
+  if (anchor.target) {
+    // By id alone: the item may have moved to another block or been reworded, and the thread goes with it.
+    const el = targetEl(anchor.target);
+    if (!el) return { status: "orphaned", range: null, el: null };
+    if (!anchor.quote) return { status: "anchored", range: null, el };
+    const range = findQuote(el, anchor.quote);
+    return range ? { status: "anchored", range, el } : { status: "outdated", range: null, el };
+  }
   let scope: Element | null = anchor.block ? root.querySelector(`[data-b="${cssEscape(anchor.block)}"]`) : null;
   if (scope && anchor.row) scope = scope.querySelector(`tr[data-row="${cssEscape(anchor.row)}"]`) ?? scope;
   if (anchor.quote) {
@@ -353,9 +377,12 @@ function updateSelectionButton() {
 
 export function anchorFromRange(range: Range): Anchor {
   const start = range.startContainer instanceof Element ? range.startContainer : range.startContainer.parentElement;
-  const block = start?.closest("[data-b]");
-  const row = start?.closest("tr[data-row]");
-  const scope = block ?? root;
+  const inTarget = start?.closest(TARGET);
+  // A selection that runs out of the item isn't a comment on the item.
+  const target = inTarget?.contains(range.endContainer) ? inTarget : null;
+  const block = target ? null : start?.closest("[data-b]");
+  const row = target ? null : start?.closest("tr[data-row]");
+  const scope = target ?? block ?? root;
   const index = textIndex(scope);
   const before = document.createRange();
   before.setStart(scope, 0);
@@ -363,6 +390,7 @@ export function anchorFromRange(range: Range): Anchor {
   const offset = before.toString().length;
   const exact = range.toString();
   return {
+    ...(target ? targetAnchor(target) : {}),
     ...(block ? { block: block.getAttribute("data-b")! } : {}),
     ...(row ? { row: row.getAttribute("data-row")! } : {}),
     quote: {
@@ -378,8 +406,11 @@ function onPointerMove(e: PointerEvent) {
   if (!canComment || e.pointerType !== "mouse") return;
   const target = e.target as Element | null;
   if (target?.closest(".art-block-comment")) return;
-  const block = target?.closest?.("[data-b]") ?? null;
+  // The item first: one that wraps blocks of its own is still commented on whole.
+  const block = target?.closest?.(TARGET) ?? target?.closest?.("[data-b]") ?? null;
   if (block === hoveredBlock) return;
+  // An item's button sits out in the gutter, past whatever block the item is in; keep it on the way there.
+  if (hoveredBlock?.matches(TARGET) && !block?.matches(TARGET) && inButtonCorridor(e, hoveredBlock)) return;
   // Leaving a block toward its button crosses the gutter, which is no block; keep the button.
   if (!block && hoveredBlock && inButtonCorridor(e, hoveredBlock)) return;
   hoveredBlock = block;
@@ -399,7 +430,7 @@ function onPointerMove(e: PointerEvent) {
     blockButton.innerHTML = '<svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true"><path d="M6 1.5v9M1.5 6h9" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>';
     blockButton.addEventListener("click", (ev) => {
       ev.stopPropagation();
-      if (hoveredBlock) send({ t: "comment:new", anchor: blockAnchor(hoveredBlock) });
+      if (hoveredBlock) send({ t: "comment:new", anchor: hoveredBlock.matches(TARGET) ? targetAnchor(hoveredBlock) : blockAnchor(hoveredBlock) });
     });
     document.body.append(blockButton);
   }
@@ -430,6 +461,43 @@ export function blockAnchor(block: Element): Anchor {
   const text = (block.textContent ?? "").replace(/\s+/g, " ").trim();
   if (!text && block.querySelector("img")) return { block: id, label: "Image" };
   return { block: id, label: text ? (text.length > 60 ? `${text.slice(0, 59)}…` : text) : "Block" };
+}
+
+function targetEl(id: string): Element | null {
+  return (root ?? document).querySelector(`[${TARGET_ATTR}="${cssEscape(id)}"]`);
+}
+
+function targetLabel(el: Element): string {
+  const text = (el.getAttribute(TARGET_LABEL_ATTR) ?? ownText(el)).replace(/\s+/g, " ").trim();
+  return text ? (text.length > 60 ? `${text.slice(0, 59)}…` : text) : "Item";
+}
+
+/** An item's words without its controls: a row's "Comment" button or status select is not its name. */
+function ownText(el: Element): string {
+  let text = "";
+  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, {
+    acceptNode: (n) => (n.parentElement?.closest("button, select, input, textarea, [role='button'], [role='combobox']") ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT),
+  });
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) text += `${(n as Text).data} `;
+  return text;
+}
+
+export function targetAnchor(el: Element): Anchor {
+  return { target: el.getAttribute(TARGET_ATTR)!, label: targetLabel(el) };
+}
+
+/** The comment target `node` is in, if any (the keys comment on the whole item). */
+export function targetOf(node: Element | null): Element | null {
+  return node?.closest(TARGET) ?? null;
+}
+
+/** For an item's own button (useCommentTarget): open its thread, or start one when it has none. */
+export function commentOnTarget(id: string) {
+  const open = placed.find((p) => threads.find((t) => t.id === p.id)?.anchor?.target === id) ?? threads.find((t) => t.anchor?.target === id);
+  if (open) return send({ t: "comment:open", thread: open.id });
+  if (!canComment) return;
+  const el = targetEl(id);
+  send({ t: "comment:new", anchor: el ? targetAnchor(el) : { target: id } });
 }
 
 /** Clicking highlighted text opens its thread. */

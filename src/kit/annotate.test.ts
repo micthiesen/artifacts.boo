@@ -60,3 +60,113 @@ test("whitespace differences still match", () => {
   p.textContent = "We pay $10   a\nmonth, and more.";
   expect(locate({ block: "costs-1", quote: { exact: "$10 a month", prefix: "", suffix: "" } }).status).toBe("anchored");
 });
+
+// ---- comment targets: items a component marked with an id of its own ----------------
+
+function tracker(tasks: [id: string, title: string][]) {
+  root.querySelector(".art-page")!.insertAdjacentHTML(
+    "beforeend",
+    `<ul data-b="tasks">${tasks.map(([id, title]) => `<li data-comment-target="task/${id}" data-comment-label="${title}"><span>${title}</span> <em>todo</em></li>`).join("")}</ul>`,
+  );
+}
+const item = (id: string) => root.querySelector(`[data-comment-target="task/${id}"]`);
+
+test("a selection inside a comment target anchors to the target, not its block", () => {
+  tracker([["p1-ci", "Set up CI"], ["p2-docs", "Write docs"]]);
+  const a = anchorFromRange(select(item("p1-ci")!.querySelector("span")!, "CI"));
+  expect(a).toEqual({ target: "task/p1-ci", label: "Set up CI", quote: { exact: "CI", prefix: "Set up ", suffix: " todo" } });
+  expect(a.block).toBeUndefined();
+  expect(locate(a)).toMatchObject({ status: "anchored", el: item("p1-ci") });
+  // A selection that runs out of the item is a comment on the block's text, as before.
+  const r = document.createRange();
+  r.setStart(item("p1-ci")!.querySelector("span")!.firstChild!, 0);
+  r.setEnd(item("p2-docs")!.querySelector("span")!.firstChild!, 5);
+  expect(anchorFromRange(r)).toMatchObject({ block: "tasks" });
+  expect(anchorFromRange(r).target).toBeUndefined();
+});
+
+test("a thread on a target follows it through reordering and rewording, and is orphaned only when the id leaves", () => {
+  tracker([["p1-ci", "Set up CI"], ["p2-docs", "Write docs"]]);
+  const whole = { target: "task/p1-ci", label: "Set up CI" };
+  const quoted = anchorFromRange(select(item("p1-ci")!.querySelector("span")!, "CI"));
+  expect(locate(whole)).toMatchObject({ status: "anchored", el: item("p1-ci"), range: null });
+
+  // Reordered, and moved out of the block it was in.
+  const li = item("p1-ci")!;
+  root.querySelector(".art-page")!.append(li);
+  expect(locate(whole)).toMatchObject({ status: "anchored", el: li });
+  expect(locate(quoted).status).toBe("anchored");
+
+  // Reworded: the item's thread is untouched; a quote of the old words is outdated but still on the item.
+  li.querySelector("span")!.textContent = "Continuous integration";
+  li.setAttribute("data-comment-label", "Continuous integration");
+  expect(locate(whole)).toMatchObject({ status: "anchored", el: li });
+  expect(locate(quoted)).toMatchObject({ status: "outdated", el: li, range: null });
+  // The old words turning up in another item don't move the thread there.
+  item("p2-docs")!.querySelector("span")!.textContent = "Write CI docs";
+  expect(locate(quoted)).toMatchObject({ status: "outdated", el: li });
+
+  li.remove();
+  expect(locate(whole)).toEqual({ status: "orphaned", range: null, el: null });
+  expect(locate(quoted).status).toBe("orphaned");
+  // The id coming back (a filter cleared) brings the thread back.
+  tracker([["p1-ci", "CI again"]]);
+  expect(locate(whole).status).toBe("anchored");
+});
+
+test("the frame reports each target's current label, counts its threads and starts or opens them", async () => {
+  const { setThreads, commentOnTarget, targetAnchor } = await import("./annotate.ts");
+  const store = await import("./store.ts");
+  const sent: any[] = [];
+  installAnnotations(root, (m) => sent.push(m));
+  tracker([["p1-ci", "Set up CI"], ["p2-docs", "Write docs"]]);
+  expect(targetAnchor(item("p2-docs")!)).toEqual({ target: "task/p2-docs", label: "Write docs" });
+  // Without a label, an item is named by its words, not by its own controls.
+  root.querySelector(".art-page")!.insertAdjacentHTML("beforeend", `<div data-comment-target="risk/1"><p data-b="risks-9">Latency  risk</p><button>Comment</button><select><option>todo</option></select></div>`);
+  expect(targetAnchor(root.querySelector('[data-comment-target="risk/1"]')!)).toEqual({ target: "risk/1", label: "Latency risk" });
+
+  commentOnTarget("task/p2-docs");
+  expect(sent).toEqual([]); // not allowed to comment yet
+  setThreads([], true);
+  commentOnTarget("task/p2-docs");
+  expect(sent.at(-1)).toEqual({ t: "comment:new", anchor: { target: "task/p2-docs", label: "Write docs" } });
+
+  item("p1-ci")!.setAttribute("data-comment-label", "Continuous integration");
+  setThreads(
+    [
+      { id: "t1", anchor: { target: "task/p1-ci", label: "Set up CI" } },
+      { id: "t2", anchor: { target: "task/p1-ci" } },
+      { id: "t3", anchor: { target: "task/gone", label: "Removed task" } },
+      { id: "t4", anchor: { block: "costs-1" } },
+    ],
+    true,
+  );
+  expect(store.getComments()).toEqual({ counts: { "task/p1-ci": 2, "task/gone": 1 }, canComment: true });
+  expect(sent.at(-1)).toEqual({
+    t: "anchors",
+    placed: [
+      { id: "t4", status: "anchored" },
+      { id: "t1", status: "anchored", label: "Continuous integration" },
+      { id: "t2", status: "anchored", label: "Continuous integration" },
+      { id: "t3", status: "orphaned" },
+    ],
+  });
+  expect(item("p1-ci")!.classList.contains("art-commented")).toBe(true);
+  commentOnTarget("task/p1-ci");
+  expect(sent.at(-1)).toEqual({ t: "comment:open", thread: "t1" });
+  setThreads([], false);
+});
+
+test("an item that rewrites its own class gets its comment mark back", async () => {
+  const { setThreads } = await import("./annotate.ts");
+  tracker([["p1-ci", "Set up CI"]]);
+  setThreads([{ id: "t1", anchor: { target: "task/p1-ci" } }], true);
+  const li = item("p1-ci")!;
+  expect(li.className).toBe("art-commented");
+  // Let the mutations from building the list go by, so only the class change is left to notice.
+  await new Promise((r) => setTimeout(r, 300));
+  li.className = "done"; // what React does when the component's className changes
+  await new Promise((r) => setTimeout(r, 120));
+  expect(li.className).toBe("done art-commented");
+  setThreads([], false);
+});

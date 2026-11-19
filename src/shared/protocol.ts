@@ -26,7 +26,7 @@ export type FrameMessage =
   /** The viewer clicked highlighted text belonging to a thread. */
   | { t: "comment:open"; thread: string }
   /** Where each thread's anchor landed, in document order. */
-  | { t: "anchors"; placed: { id: string; status: AnchorStatus }[] }
+  | { t: "anchors"; placed: PlacedAnchor[] }
   /** Listen: the page's readable text, in reading order, one unit per block; `start` is the first unit on screen. */
   | { t: "speak:units"; units: SpeakUnit[]; start: number }
   /** Listen: the viewer tapped a block while listening; start reading there. */
@@ -123,10 +123,16 @@ export type SyncServerMessage =
  * with some context (W3C TextQuoteSelector). Any part may be missing: a block
  * without a quote is a whole-element comment, a quote without a block is
  * matched anywhere on the page.
+ *
+ * `target` is an id the artifact's own code gave one of its items
+ * (`data-comment-target`, from `Commentable` or `useCommentTarget`). It is
+ * found by that id alone, so the thread follows the item through reordering
+ * and rewording; a quote with it is looked for inside the item only.
  */
 export type Anchor = {
   block?: string;
   row?: string;
+  target?: string;
   quote?: { exact: string; prefix: string; suffix: string };
   /** Short label for element anchors without text ("Chart", "Table row Forgejo"). */
   label?: string;
@@ -134,6 +140,11 @@ export type Anchor = {
 
 /** anchored: found as written; moved: found by fuzzy match; outdated: block exists but text changed; orphaned: gone. */
 export type AnchorStatus = "anchored" | "outdated" | "orphaned";
+
+/** Where one thread landed. `label` is what a comment target is called on the page now. */
+export type PlacedAnchor = { id: string; status: AnchorStatus; label?: string };
+export const ANCHOR_TARGET_MAX = 120;
+export const ANCHOR_LABEL_MAX = 120;
 
 export type ThreadComment = {
   id: string;

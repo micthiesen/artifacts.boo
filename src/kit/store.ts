@@ -18,6 +18,7 @@ let local: Record<string, JsonValue> = {};
 let presence: string[] = [];
 let links: { backlinks: Backlink[]; linkTitles: Record<string, string> } = { backlinks: [], linkTitles: {} };
 let theme: Theme = "light";
+let comments: CommentInfo = { counts: {}, canComment: false };
 let initialized = false;
 let version = 0;
 const listeners = new Set<Listener>();
@@ -56,6 +57,7 @@ export function reset() {
   local = {};
   presence = [];
   theme = "light";
+  comments = { counts: {}, canComment: false };
   initialized = false;
   prefixCache.clear();
   warned.clear();
@@ -109,6 +111,16 @@ export function linkTitle(href: string): string | null {
 }
 export const getPresence = () => presence;
 export const getTheme = () => theme;
+
+/** Open threads per comment target id, and whether this viewer may comment (fed by annotate.ts). */
+export type CommentInfo = { counts: Record<string, number>; canComment: boolean };
+export const getComments = () => comments;
+
+export function setComments(next: CommentInfo) {
+  if (next.canComment === comments.canComment && JSON.stringify(next.counts) === JSON.stringify(comments.counts)) return;
+  comments = next;
+  emit();
+}
 
 export function setPresence(v: string[]) {
   presence = [...v];

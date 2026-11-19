@@ -9,7 +9,7 @@
 // y copies a link to it, Enter opens its comment or first control. The only change to the artifact's own
 // elements is the cursor's class, which draws its outline.
 import type { Cmd } from "../shared/keys.ts";
-import { anchorFromRange, blockAnchor, commentAllowed, focusThread, rangeAt, textIndex, threadNodes } from "./annotate.ts";
+import { anchorFromRange, blockAnchor, commentAllowed, focusThread, rangeAt, targetAnchor, targetOf, textIndex, threadNodes } from "./annotate.ts";
 import { speakFrom, speakJumpTo } from "./speak.ts";
 import { rowAcross, rowsOf, rowStep, type Box } from "./keys-geometry.ts";
 import { runKeyWidget } from "./key-widget.ts";
@@ -486,6 +486,9 @@ function comment() {
   if (!commentAllowed()) return note("Sign in to comment");
   const el = current();
   if (!el) return;
+  // An item the page marked as a comment target is commented on whole, so the thread survives its rewording.
+  const item = targetOf(el);
+  if (item) return send({ t: "comment:new", anchor: targetAnchor(item) });
   const block = el.closest("[data-b]");
   const text = (el.textContent ?? "").trim();
   // Text gets a quote, so the comment points at exactly this paragraph; charts, images and long blocks get the block.

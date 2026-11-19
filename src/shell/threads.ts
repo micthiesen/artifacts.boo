@@ -2,7 +2,7 @@
 // from a selection in the frame, and handles replies, resolve and delete. The
 // frame only reports anchors and clicks; everything here runs in the trusted
 // shell, so artifact code can't read or forge comments.
-import type { Anchor, AnchorStatus, Person, SyncClientMessage, Thread } from "../shared/protocol.ts";
+import { ANCHOR_LABEL_MAX, type Anchor, type AnchorStatus, type Person, type PlacedAnchor, type SyncClientMessage, type Thread } from "../shared/protocol.ts";
 import { whoColor } from "../shared/who.ts";
 import { keyIsTheirs, keyToken } from "../shared/keys.ts";
 import { keysOn } from "./keys.ts";
@@ -29,7 +29,7 @@ type Filter = "open" | "resolved";
 export function createDrawer(panel: HTMLElement, toggle: HTMLButtonElement, opts: DrawerOptions) {
   let threads = new Map<string, Thread>();
   let people: Person[] = [];
-  let order: { id: string; status: AnchorStatus }[] = [];
+  let order: PlacedAnchor[] = [];
   let filter: Filter = "open";
   let draft: { anchor: Anchor | null; text?: string } | null = null;
   let readSeq = opts.readSeq;
@@ -141,7 +141,7 @@ export function createDrawer(panel: HTMLElement, toggle: HTMLButtonElement, opts
       });
       body.append(add);
       const hint = el("p", "threads-hint");
-      hint.textContent = "Or select text on the page, or hover a block and press +.";
+      hint.textContent = "Or select text on the page, or hover a block or an item and press +.";
       body.append(hint);
     }
     if (!opts.canComment && opts.me === null) {
@@ -181,14 +181,15 @@ export function createDrawer(panel: HTMLElement, toggle: HTMLButtonElement, opts
     }
   }
 
-  function anchorView(anchor: Anchor | null, status: AnchorStatus | undefined, onClick?: () => void): HTMLElement | null {
+  function anchorView(anchor: Anchor | null, status: AnchorStatus | undefined, onClick?: () => void, live?: string): HTMLElement | null {
     if (!anchor) return null;
     const q = el(onClick ? "button" : "div", `thread-anchor${status === "outdated" || status === "orphaned" ? " is-stale" : ""}`);
     if (onClick) {
       (q as HTMLButtonElement).type = "button";
       q.addEventListener("click", onClick);
     }
-    const text = anchor.quote?.exact ?? anchor.label ?? (anchor.row ? `Row ${anchor.row}` : "This block");
+    // A comment target shows what the item is called now; once it has left the page, the name saved with the thread.
+    const text = anchor.quote?.exact ?? live ?? anchor.label ?? anchor.target ?? (anchor.row ? `Row ${anchor.row}` : "This block");
     q.textContent = text.length > 160 ? `${text.slice(0, 159)}…` : text;
     return q;
   }
@@ -204,7 +205,7 @@ export function createDrawer(panel: HTMLElement, toggle: HTMLButtonElement, opts
     else if (t.resolved) chips.append(chip(`Resolved by ${nameOf(t.resolved.by)}`, "muted"));
     if (!t.resolved && status === "outdated") chips.append(chip(`Text changed since v${t.version}`, "caution"));
     if (chips.childElementCount) c.append(chips);
-    const anchor = anchorView(t.anchor, status, status === "orphaned" ? undefined : () => select(t.id));
+    const anchor = anchorView(t.anchor, status, status === "orphaned" ? undefined : () => select(t.id), order.find((o) => o.id === t.id)?.label);
     if (anchor) c.append(anchor);
     for (const cm of t.comments) {
       const row = el("div", `comment${cm.seq > readSeq && cm.by !== opts.me ? " is-new" : ""}`);
@@ -501,8 +502,10 @@ export function createDrawer(panel: HTMLElement, toggle: HTMLButtonElement, opts
       render();
       if (isOpen()) markRead();
     },
-    setPlacement(placed: { id: string; status: AnchorStatus }[]) {
-      order = placed;
+    setPlacement(placed: PlacedAnchor[]) {
+      // The frame is the artifact's own code: take a label from it only as a short string.
+      // Only for a thread on a comment target: no other thread's name is the page's to change.
+      order = placed.map((p) => ({ id: p.id, status: p.status, ...(typeof p.label === "string" && p.label && threads.get(p.id)?.anchor?.target ? { label: p.label.slice(0, ANCHOR_LABEL_MAX) } : {}) }));
       render();
     },
     compose(anchor: Anchor) {
