@@ -78,7 +78,8 @@ const sub = (status: string, metadata: Record<string, unknown> = { workspace: "a
   product: { id: "prod_team", status: "active" },
   customer: { id: "cust_1", email: "admin@example.com" },
   status,
-  current_period_end_date: "2026-11-18T00:00:00.000Z",
+  // Ahead of the clock: a fixed date here started failing the day it passed.
+  current_period_end_date: new Date(Date.now() + 30 * 86_400_000).toISOString(),
   metadata,
 });
 let n = 0;
