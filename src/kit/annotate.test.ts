@@ -170,3 +170,56 @@ test("an item that rewrites its own class gets its comment mark back", async () 
   expect(li.className).toBe("done art-commented");
   setThreads([], false);
 });
+
+// ---- list items and table rows take comments of their own, with nothing marked ---------
+
+function hover(el: Element) {
+  el.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, pointerType: "mouse" }));
+  return document.querySelector<HTMLButtonElement>(".art-block-comment");
+}
+
+test("hovering a list item or table row in an unmarked component offers a comment on that item", async () => {
+  const { setThreads, anchorFor } = await import("./annotate.ts");
+  const sent: any[] = [];
+  installAnnotations(root, (m) => sent.push(m));
+  setThreads([], true);
+  root.querySelector(".art-page")!.insertAdjacentHTML(
+    "beforeend",
+    `<div data-b="tracker"><ul>
+      <li id="a"><input type="checkbox"><div><div class="title">Set up CI</div><div>Runs pgTAP</div><span>Ada</span><button>To do</button></div></li>
+      <li id="b"><div><div class="title">Write <code>docs</code> first</div><button>Done</button></div></li>
+      <li id="c"><button>Only a control</button></li>
+    </ul></div>`,
+  );
+  const li = (id: string) => root.querySelector(`#${id}`)!;
+
+  hover(li("a").querySelector("span")!)!.click();
+  expect(sent.at(-1)).toMatchObject({ t: "comment:new", anchor: { block: "tracker", quote: { exact: "Set up CI" } } });
+  // A title with markup in it is quoted whole.
+  expect(anchorFor(li("b"))).toMatchObject({ block: "tracker", quote: { exact: "Write docs first" } });
+  // The table's row, by its first cell, with the row key it already had.
+  hover(root.querySelector("tr[data-row] td:last-child")!)!.click();
+  expect(sent.at(-1)).toMatchObject({ anchor: { block: "costs-2", row: "Forgejo", quote: { exact: "Forgejo" } } });
+  // An item with no words of its own, and anything outside an item, falls back to the block.
+  hover(li("c"))!.click();
+  expect(sent.at(-1).anchor).toMatchObject({ block: "tracker" });
+  expect(sent.at(-1).anchor.quote).toBeUndefined();
+  hover(root.querySelector('[data-b="costs-1"]')!)!.click();
+  expect(sent.at(-1).anchor).toMatchObject({ block: "costs-1", label: "We pay $10 a month, and $10 more for support." });
+
+  // The thread stays with the item when it is ticked, its status changes and the list is reordered.
+  const a = anchorFor(li("a"));
+  li("a").querySelector("button")!.textContent = "Done";
+  li("a").querySelector("input")!.setAttribute("checked", "");
+  li("a").parentElement!.prepend(li("b"));
+  expect(locate(a).status).toBe("anchored");
+  expect(li("a").contains(locate(a).range!.startContainer)).toBe(true);
+  // Reworded, it is outdated but still on its block; a marked item (data-comment-target) would have kept it.
+  li("a").querySelector(".title")!.textContent = "Continuous integration";
+  expect(locate(a)).toMatchObject({ status: "outdated", el: root.querySelector('[data-b="tracker"]') });
+  // An item inside a marked target is the target's.
+  li("b").setAttribute("data-comment-target", "task/b");
+  hover(li("b").querySelector(".title")!)!.click();
+  expect(sent.at(-1).anchor).toMatchObject({ target: "task/b" });
+  setThreads([], false);
+});

@@ -13,6 +13,9 @@ type Placed = { id: string; status: AnchorStatus; range: Range | null; el: Eleme
 export const TARGET_ATTR = "data-comment-target";
 export const TARGET_LABEL_ATTR = "data-comment-label";
 const TARGET = `[${TARGET_ATTR}]`;
+/** Items of a list or rows of a table, whoever drew them: each takes comments of its own, with nothing for the page's author to mark. */
+const ITEM = "li, tbody tr, [role='listitem'], [role='row']";
+const CONTROLS = "button, select, input, textarea, [role='button'], [role='combobox']";
 
 const CONTEXT = 32;
 const MAX_QUOTE = 1000;
@@ -406,11 +409,11 @@ function onPointerMove(e: PointerEvent) {
   if (!canComment || e.pointerType !== "mouse") return;
   const target = e.target as Element | null;
   if (target?.closest(".art-block-comment")) return;
-  // The item first: one that wraps blocks of its own is still commented on whole.
-  const block = target?.closest?.(TARGET) ?? target?.closest?.("[data-b]") ?? null;
+  // The smallest thing first: a marked item, then a list item or table row, then the block they are in.
+  const block = target?.closest?.(TARGET) ?? itemOf(target) ?? target?.closest?.("[data-b]") ?? null;
   if (block === hoveredBlock) return;
-  // An item's button sits out in the gutter, past whatever block the item is in; keep it on the way there.
-  if (hoveredBlock?.matches(TARGET) && !block?.matches(TARGET) && inButtonCorridor(e, hoveredBlock)) return;
+  // An item's button sits out in the gutter, past the rest of the block the item is in; keep it on the way there.
+  if (hoveredBlock && !hoveredBlock.hasAttribute("data-b") && (!block || block.contains(hoveredBlock)) && inButtonCorridor(e, hoveredBlock)) return;
   // Leaving a block toward its button crosses the gutter, which is no block; keep the button.
   if (!block && hoveredBlock && inButtonCorridor(e, hoveredBlock)) return;
   hoveredBlock = block;
@@ -430,7 +433,7 @@ function onPointerMove(e: PointerEvent) {
     blockButton.innerHTML = '<svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true"><path d="M6 1.5v9M1.5 6h9" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>';
     blockButton.addEventListener("click", (ev) => {
       ev.stopPropagation();
-      if (hoveredBlock) send({ t: "comment:new", anchor: hoveredBlock.matches(TARGET) ? targetAnchor(hoveredBlock) : blockAnchor(hoveredBlock) });
+      if (hoveredBlock) send({ t: "comment:new", anchor: anchorFor(hoveredBlock) });
     });
     document.body.append(blockButton);
   }
@@ -461,6 +464,41 @@ export function blockAnchor(block: Element): Anchor {
   const text = (block.textContent ?? "").replace(/\s+/g, " ").trim();
   if (!text && block.querySelector("img")) return { block: id, label: "Image" };
   return { block: id, label: text ? (text.length > 60 ? `${text.slice(0, 59)}…` : text) : "Block" };
+}
+
+/** The list item or table row `node` is in, when it has words to point at. */
+function itemOf(node: Element | null): Element | null {
+  const el = node?.closest?.(ITEM) ?? null;
+  return el && root.contains(el) && !isOurs(el) && itemRange(el) ? el : null;
+}
+
+/**
+ * What an item is called: its first run of words outside its controls (a task's title, a row's first cell).
+ * The comment quotes only that, so ticking the item or changing its status doesn't cut the thread loose.
+ */
+function itemRange(el: Element): Range | null {
+  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, {
+    acceptNode: (n) => (n.parentElement?.closest(CONTROLS) || isOurs(n) || !(n as Text).data.trim() ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT),
+  });
+  const first = walker.nextNode();
+  if (!first) return null;
+  const range = document.createRange();
+  const parent = first.parentElement;
+  // The whole title when it has its own element (words with a link or code in them), else just this run.
+  if (parent && parent !== el && el.contains(parent) && !parent.querySelector(`${CONTROLS}, ${ITEM}`) && (parent.textContent ?? "").length <= 300) range.selectNodeContents(parent);
+  else range.selectNodeContents(first);
+  const text = range.toString();
+  return text.trim() && text.length <= MAX_QUOTE ? range : null;
+}
+
+/** The anchor for what the hover button is on: a marked item, a block, or a list item or table row. */
+export function anchorFor(el: Element): Anchor {
+  if (el.matches(TARGET)) return targetAnchor(el);
+  if (el.hasAttribute("data-b")) return blockAnchor(el);
+  const range = itemRange(el);
+  if (range) return anchorFromRange(range);
+  const block = el.closest("[data-b]");
+  return block ? blockAnchor(block) : {};
 }
 
 function targetEl(id: string): Element | null {
