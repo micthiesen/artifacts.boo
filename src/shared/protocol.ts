@@ -104,6 +104,8 @@ export type SyncClientMessage =
   | { t: "comment"; cid: string; thread?: string; anchor?: Anchor | null; text: string }
   | { t: "resolve"; cid: string; thread: string; resolved: boolean }
   | { t: "comment:delete"; cid: string; comment: string }
+  /** Add (`on`) or take back your own reaction to a comment. */
+  | { t: "react"; cid: string; comment: string; emoji: string; on: boolean }
   /** The viewer has read comments up to this event seq. */
   | { t: "read"; seq: number };
 
@@ -146,6 +148,12 @@ export type PlacedAnchor = { id: string; status: AnchorStatus; label?: string };
 export const ANCHOR_TARGET_MAX = 120;
 export const ANCHOR_LABEL_MAX = 120;
 
+/**
+ * The reactions a comment can get, with the name read out for each. A fixed set drawn by the system's
+ * emoji font: a free choice would need a picker and its data in the shell.
+ */
+export const REACTIONS: Record<string, string> = { "👍": "Thumbs up", "❤️": "Heart", "🎉": "Celebrate", "😄": "Laugh", "👀": "Looking", "✅": "Done" };
+
 export type ThreadComment = {
   id: string;
   /** Email, or "agent" for replies posted through MCP. */
@@ -153,6 +161,8 @@ export type ThreadComment = {
   text: string;
   at: string;
   seq: number;
+  /** In the order of REACTIONS; only those someone gave. */
+  reactions?: { emoji: string; by: string[] }[];
 };
 
 export type Thread = {

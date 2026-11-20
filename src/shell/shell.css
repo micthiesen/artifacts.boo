@@ -538,6 +538,37 @@ div.thread-anchor { cursor: default; }
 .avatar.small { width: 1.35rem; height: 1.35rem; font-size: 10px; }
 .avatar.agent { position: relative; border: 0; border-radius: 0; background: none; }
 .avatar.agent::after { content: ""; position: absolute; inset: 0; background: url(/static/icons/logo-small.svg) center / contain no-repeat; }
+/* Reactions: a chip per emoji under the comment (yours outlined in iris), and a menu of the six that grows from the comment's React button. */
+.comment { position: relative; }
+.tbtn.react-add { position: relative; width: 1.35rem; height: 1.35rem; margin-left: auto; border-radius: .4rem; }
+.tbtn.react-add::after { content: ""; position: absolute; inset: -.2rem; }
+.tbtn.react-add + .tbtn.link { margin-left: .2rem; }
+.reactions { display: flex; flex-wrap: wrap; gap: .3rem; margin-top: .15rem; }
+.reaction {
+  display: inline-flex; align-items: center; gap: .3rem; height: 1.5rem; padding: 0 .5rem; border-radius: 999px; border: 1px solid var(--input);
+  background: none; color: var(--muted-fg); font: inherit; font-size: 12.5px; font-variant-numeric: tabular-nums; cursor: pointer;
+  transition: background-color var(--motion-fast) var(--motion-ease), border-color var(--motion-fast) var(--motion-ease);
+}
+.reaction:hover:not(:disabled) { background: var(--muted); }
+.reaction:active:not(:disabled) { background: color-mix(in oklab, var(--input) 50%, var(--muted)); }
+.reaction[aria-pressed="true"] { border-color: var(--primary); background: color-mix(in oklab, var(--primary) 14%, transparent); color: var(--fg); font-weight: 650; }
+.reaction:disabled { cursor: default; }
+.react-pop {
+  position: absolute; right: 0; top: 1.7rem; z-index: 5; max-width: 100%; padding: .25rem; border: 1px solid var(--border); border-radius: .7rem;
+  background: var(--popover); box-shadow: var(--shadow-pop); transform-origin: top right;
+  transition: opacity var(--motion-base) var(--motion-ease), scale var(--motion-base) var(--motion-ease), display var(--motion-base) allow-discrete;
+}
+.react-pop[hidden] { display: none; opacity: 0; scale: .97; pointer-events: none; transition-duration: var(--motion-fast); }
+@starting-style { .react-pop:not([hidden]) { opacity: 0; scale: .97; } }
+.react-pop.is-still { transition: none; }
+.react-menu { display: flex; }
+.react-menu button { width: 2.25rem; height: 2.25rem; padding: 0; border: 0; border-radius: calc(.7rem - .25rem - 1px); background: none; font: inherit; font-size: 18px; cursor: pointer; }
+.react-menu button:hover { background: var(--muted); }
+.react-menu button:active { background: color-mix(in oklab, var(--input) 50%, var(--muted)); }
+.react-menu button[aria-checked="true"] { background: color-mix(in oklab, var(--primary) 14%, transparent); box-shadow: inset 0 0 0 1px var(--primary); }
+.react-menu button:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
+.react-who div { display: flex; gap: .4rem; }
+.react-who { display: grid; gap: .15rem; margin: .25rem .3rem .1rem; padding-top: .35rem; border-top: 1px solid var(--border); color: var(--muted-fg); font-size: 12.5px; line-height: 1.4; overflow-wrap: anywhere; }
 .thread-input {
   width: 100%; min-height: 2.6rem; resize: vertical; padding: .5rem .6rem; border-radius: .55rem; border: 1px solid var(--input);
   background: color-mix(in oklab, var(--bg) 60%, transparent); color: var(--fg); font: inherit; font-size: 14px; line-height: 1.45;

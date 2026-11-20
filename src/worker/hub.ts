@@ -70,6 +70,7 @@ import {
   SHARED_STATE_MAX_BYTES,
   SHARED_VALUE_MAX_BYTES,
   type Anchor,
+  REACTIONS,
   type Backlink,
   type JsonValue,
   type Person,
@@ -195,6 +196,8 @@ const DUE_BATCH = 500;
 const CONTENT_WORDS_MAX = 3;
 /** Comments aren't counted in storage, so each artifact holds at most this many. */
 const COMMENTS_PER_ARTIFACT_MAX = 5000;
+/** Reactions one person may add or take back in a minute. */
+const REACTS_PER_MINUTE = 60;
 const CHECKS_USED_UP = "this workspace has used today's render checks; they come back tomorrow (the page itself is saved)";
 const CHECK_INLINE_WAIT_MS = 8_000;
 const ERRORS_KEEP = 30;
@@ -212,7 +215,7 @@ const SHARE_MAIL_PER_PERSON = 50;
 /** Tables keyed by artifact, cleared when an artifact is deleted. */
 const ARTIFACT_TABLES = [
   "blobs", "files", "history", "builds", "shares", "state", "errors", "checks", "assets", "sources", "events", "threads",
-  "comments", "watches", "seen", "outbox", "pins",
+  "comments", "reactions", "watches", "seen", "outbox", "pins",
 ];
 
 export const MIGRATIONS: Migration[] = [
@@ -348,6 +351,14 @@ export const MIGRATIONS: Migration[] = [
         (SELECT MIN(created_at) FROM grants WHERE grants.email = members.email),
         (SELECT MIN(created_at) FROM tokens WHERE tokens.email = members.email))
       WHERE last_seen_at IS NULL;
+    `),
+  // Reactions to comments: one row per person, comment and emoji.
+  (sql) =>
+    sql.exec(`
+      CREATE TABLE reactions (
+        comment_id TEXT NOT NULL, artifact_id TEXT NOT NULL, by TEXT NOT NULL, emoji TEXT NOT NULL, at TEXT NOT NULL,
+        PRIMARY KEY (comment_id, by, emoji));
+      CREATE INDEX reactions_by_artifact ON reactions (artifact_id);
     `),
 ];
 
@@ -2389,6 +2400,8 @@ export class Workspace extends DurableObject {
     );
     // Subscriptions' cursors point into the log that was just replaced; clients resubscribe.
     this.sql.exec(`DELETE FROM event_subs`);
+    // A backup from before reactions leaves that table as it was: drop those whose comments it didn't bring.
+    this.sql.exec(`DELETE FROM reactions WHERE comment_id NOT IN (SELECT id FROM comments)`);
     this.sql.exec(`DELETE FROM links`);
     this.setSetting("links_backfill", "");
     // A backup from before the restyle brings the retired gradient classes back: run the pass again.
@@ -2506,6 +2519,8 @@ export class Workspace extends DurableObject {
         this.resolveThread(tag.id, tag.email, msg.thread, msg.resolved, { role: tag.role, origin: tag.origin, cid });
       } else if (msg.t === "comment:delete") {
         this.deleteComment(tag.id, tag.email, msg.comment, tag.role, cid);
+      } else if (msg.t === "react") {
+        this.react(tag.id, tag.email, msg.comment, msg.emoji, msg.on, cid);
       } else if (msg.t === "set") {
         if (tag.role === "view") throw new HubError("this viewer has read-only access");
         // On a support request, the person who sent it comments and says whether a fix helped; nothing else.
@@ -2534,9 +2549,10 @@ export class Workspace extends DurableObject {
   threads(id: string): Thread[] {
     const threads = this.sql.exec(`SELECT * FROM threads WHERE artifact_id = ? ORDER BY at`, id).toArray();
     const comments = new Map<string, ThreadComment[]>();
+    const reactions = groupReactions(this.sql.exec(`SELECT comment_id, emoji, by FROM reactions WHERE artifact_id = ? ORDER BY at`, id).toArray());
     for (const c of this.sql.exec(`SELECT * FROM comments WHERE artifact_id = ? ORDER BY seq`, id)) {
       const list = comments.get(c.thread_id as string) ?? [];
-      list.push({ id: c.id as string, by: c.by as string, text: c.text as string, at: c.at as string, seq: c.seq as number });
+      list.push(toComment(c, reactions));
       comments.set(c.thread_id as string, list);
     }
     return threads.map((t) => toThread(t, comments.get(t.id as string) ?? []));
@@ -2545,10 +2561,13 @@ export class Workspace extends DurableObject {
   private thread(threadId: string): Thread | null {
     const t = this.sql.exec(`SELECT * FROM threads WHERE id = ?`, threadId).toArray()[0];
     if (!t) return null;
+    const reactions = groupReactions(
+      this.sql.exec(`SELECT comment_id, emoji, by FROM reactions WHERE comment_id IN (SELECT id FROM comments WHERE thread_id = ?) ORDER BY at`, threadId).toArray(),
+    );
     const comments = this.sql
       .exec(`SELECT * FROM comments WHERE thread_id = ? ORDER BY seq`, threadId)
       .toArray()
-      .map((c) => ({ id: c.id as string, by: c.by as string, text: c.text as string, at: c.at as string, seq: c.seq as number }));
+      .map((c) => toComment(c, reactions));
     return toThread(t, comments);
   }
 
@@ -2654,6 +2673,7 @@ export class Workspace extends DurableObject {
     const threadId = c.thread_id as string;
     this.ctx.storage.transactionSync(() => {
       this.sql.exec(`DELETE FROM comments WHERE id = ?`, commentId);
+      this.sql.exec(`DELETE FROM reactions WHERE comment_id = ?`, commentId);
       const left = this.sql.exec(`SELECT COUNT(*) AS n FROM comments WHERE thread_id = ?`, threadId).one().n as number;
       if (left === 0) this.sql.exec(`DELETE FROM threads WHERE id = ?`, threadId);
       this.logEvent(id, actor, "comment-delete", { thread: threadId, comment: commentId });
@@ -2682,6 +2702,50 @@ export class Workspace extends DurableObject {
     return thread;
   }
 
+  private reactTimes = new Map<string, number[]>();
+
+  /**
+   * Add or take back a person's reaction to a comment. Quiet on purpose: nobody is notified and a resolved
+   * thread stays resolved. The activity log gets a line when one is added, so an agent reading it sees the
+   * acknowledgment.
+   */
+  react(id: string, actor: string, commentId: string, emoji: string, on: boolean, cid?: string): Thread {
+    this.requireArtifact(id);
+    if (typeof emoji !== "string" || !Object.hasOwn(REACTIONS, emoji)) throw new HubError(`reactions are one of ${Object.keys(REACTIONS).join(" ")}`);
+    const c = this.sql.exec(`SELECT thread_id FROM comments WHERE id = ? AND artifact_id = ?`, String(commentId), id).toArray()[0];
+    if (!c) throw new HubError("that comment was deleted");
+    // Kept in memory: someone pressing fast enough to matter keeps the object awake, so the count survives.
+    const now = Date.now();
+    const times = (this.reactTimes.get(actor) ?? []).filter((t) => t > now - 60_000);
+    if (times.length >= REACTS_PER_MINUTE) throw new HubError("too many reactions in a minute; wait a moment");
+    times.push(now);
+    if (this.reactTimes.size > 1000) this.reactTimes.clear();
+    this.reactTimes.set(actor, times);
+    const threadId = c.thread_id as string;
+    if (on) {
+      this.withinCapacity();
+      const added = this.sql
+        .exec(`INSERT OR IGNORE INTO reactions (comment_id, artifact_id, by, emoji, at) VALUES (?, ?, ?, ?, ?) RETURNING 1`, commentId, id, actor, emoji, new Date(now).toISOString())
+        .toArray().length;
+      // Pressing one on and off logs its first line only.
+      const floor = (this.sql.exec(`SELECT COALESCE(MAX(seq), 0) AS n FROM events`).one().n as number) - 200;
+      const logged = this.sql
+        .exec(
+          `SELECT 1 FROM events WHERE seq > ? AND artifact_id = ? AND type = 'react' AND actor = ? AND at > ?
+           AND json_extract(data, '$.comment') = ? AND json_extract(data, '$.emoji') = ? LIMIT 1`,
+          floor, id, actor, new Date(now - 60_000).toISOString(), commentId, emoji,
+        )
+        .toArray().length;
+      if (added && !logged) this.logEvent(id, actor, "react", { thread: threadId, comment: commentId, emoji });
+    } else {
+      this.sql.exec(`DELETE FROM reactions WHERE comment_id = ? AND by = ? AND emoji = ?`, commentId, actor, emoji);
+    }
+    this.markDirty();
+    const thread = this.thread(threadId)!;
+    this.broadcast(id, { t: "thread", thread, cid, colours: this.threadColours([thread]) });
+    return thread;
+  }
+
   /**
    * People to @mention, with display names: the owner, exact-email shares and
    * commenters. A view-role viewer (`limitedTo`) only sees commenters and
@@ -2694,6 +2758,7 @@ export class Workspace extends DurableObject {
       for (const r of this.sql.exec(`SELECT email FROM shares WHERE artifact_id = ? AND email LIKE '%_@%'`, id)) emails.add(r.email as string);
     }
     for (const r of this.sql.exec(`SELECT DISTINCT by FROM comments WHERE artifact_id = ? AND by LIKE '%@%'`, id)) emails.add(r.by as string);
+    for (const r of this.sql.exec(`SELECT DISTINCT by FROM reactions WHERE artifact_id = ?`, id)) emails.add(r.by as string);
     const names = await this.namesOf([...emails]);
     return [...emails].sort().map((email) => ({ email, name: names[email] ?? null }));
   }
@@ -3823,6 +3888,24 @@ export type ChangeOptions = {
 
 function defaultLevel(owner: boolean): WatchLevel {
   return owner ? "all" : "participating";
+}
+
+/** Reaction rows by comment, each comment's in the order of REACTIONS and each emoji's people in the order they reacted. */
+function groupReactions(rows: Record<string, SqlStorageValue>[]): Map<string, NonNullable<ThreadComment["reactions"]>> {
+  const byComment = new Map<string, Map<string, string[]>>();
+  for (const r of rows) {
+    const of = byComment.get(r.comment_id as string) ?? new Map<string, string[]>();
+    of.set(r.emoji as string, [...(of.get(r.emoji as string) ?? []), r.by as string]);
+    byComment.set(r.comment_id as string, of);
+  }
+  const out = new Map<string, NonNullable<ThreadComment["reactions"]>>();
+  for (const [comment, of] of byComment) out.set(comment, Object.keys(REACTIONS).filter((e) => of.has(e)).map((emoji) => ({ emoji, by: of.get(emoji)! })));
+  return out;
+}
+
+function toComment(c: Record<string, SqlStorageValue>, reactions: Map<string, NonNullable<ThreadComment["reactions"]>>): ThreadComment {
+  const r = reactions.get(c.id as string);
+  return { id: c.id as string, by: c.by as string, text: c.text as string, at: c.at as string, seq: c.seq as number, ...(r ? { reactions: r } : {}) };
 }
 
 function toThread(t: Record<string, SqlStorageValue>, comments: ThreadComment[]): Thread {

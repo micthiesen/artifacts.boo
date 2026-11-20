@@ -2,11 +2,12 @@
 // from a selection in the frame, and handles replies, resolve and delete. The
 // frame only reports anchors and clicks; everything here runs in the trusted
 // shell, so artifact code can't read or forge comments.
-import { ANCHOR_LABEL_MAX, type Anchor, type AnchorStatus, type Person, type PlacedAnchor, type SyncClientMessage, type Thread } from "../shared/protocol.ts";
+import { ANCHOR_LABEL_MAX, REACTIONS, type Anchor, type AnchorStatus, type Person, type PlacedAnchor, type SyncClientMessage, type Thread, type ThreadComment } from "../shared/protocol.ts";
 import { whoColor } from "../shared/who.ts";
 import { keyIsTheirs, keyToken } from "../shared/keys.ts";
 import { keysOn } from "./keys.ts";
 import { toast } from "./toast.ts";
+import { motionMs, move } from "../shared/motion.ts";
 
 export type DrawerOptions = {
   me: string | null;
@@ -38,6 +39,10 @@ export function createDrawer(panel: HTMLElement, toggle: HTMLButtonElement, opts
   /** Comments sent but not yet saved, by cid: a rejected one puts its text back. */
   const unsaved = new Map<string, { thread: string; text: string } | { anchor: Anchor | null; text: string }>();
   let pendingFocus: string | null = null;
+  /** Your reactions sent but not yet saved, by cid: shown at once, and taken back if refused or never answered. */
+  const reacting = new Map<string, { comment: string; emoji: string; on: boolean }>();
+  /** The comment whose reaction menu is open. */
+  let reactOpen: string | null = null;
 
   const nameOf = (email: string) => {
     if (email === "agent") return "Agent";
@@ -236,6 +241,44 @@ export function createDrawer(panel: HTMLElement, toggle: HTMLButtonElement, opts
       const text = el("p", "comment-text");
       renderText(text, cm.text);
       row.append(meta, text);
+      if (opts.canComment) {
+        const add = button("", "icon react-add", () => (reactOpen === cm.id ? closeReact(true) : openReact(cm.id)));
+        add.innerHTML = REACT_ICON;
+        add.setAttribute("aria-label", "React");
+        add.setAttribute("aria-haspopup", "menu");
+        add.setAttribute("aria-expanded", String(reactOpen === cm.id));
+        add.dataset.key = `react-${cm.id}`;
+        const del = meta.querySelector(".danger");
+        if (del) del.before(add);
+        else meta.append(add);
+      }
+      const reactions = reactionsOf(cm);
+      if (reactions.length) {
+        const chips = el("div", "reactions");
+        for (const r of reactions) {
+          const mine = opts.me !== null && r.by.includes(opts.me);
+          const b = el("button", "reaction");
+          b.type = "button";
+          b.disabled = !opts.canComment;
+          b.dataset.key = reactKey(cm.id, r.emoji);
+          b.setAttribute("aria-pressed", String(mine));
+          b.title = namesOf(r.by);
+          b.setAttribute("aria-label", `${REACTIONS[r.emoji]}: ${namesOf(r.by)}. Press to ${mine ? "take yours back" : "add yours"}.`);
+          const count = el("span");
+          count.textContent = String(r.by.length);
+          b.append(r.emoji, count);
+          b.addEventListener("click", () => react(cm.id, r.emoji, !mine));
+          chips.append(b);
+        }
+        row.append(chips);
+      }
+      if (reactOpen === cm.id) {
+        // Redrawn while open (a comment arrived): it is already there, so it doesn't grow in again.
+        const pop = reactMenu(cm, reactions);
+        pop.classList.add("is-still");
+        requestAnimationFrame(() => pop.classList.remove("is-still"));
+        row.append(pop);
+      }
       c.append(row);
     }
     const actions = el("div", "thread-actions");
@@ -276,6 +319,120 @@ export function createDrawer(panel: HTMLElement, toggle: HTMLButtonElement, opts
     });
     return c;
   }
+
+  // ---- reactions: a chip per emoji under a comment, and a menu of the six from its React button ----
+
+  const reactKey = (comment: string, emoji: string) => `rx-${comment}-${Object.keys(REACTIONS).indexOf(emoji)}`;
+  /** You first, so your own reaction is said in words and not only by the chip's colour. */
+  const namesOf = (by: string[]) => [...by].sort((a, b) => Number(b === opts.me) - Number(a === opts.me)).map(nameOf).join(", ");
+
+  /** A comment's reactions as shown: what is saved, with yours still on their way applied over it. */
+  function reactionsOf(cm: ThreadComment): NonNullable<ThreadComment["reactions"]> {
+    const by = new Map(Object.keys(REACTIONS).map((e) => [e, [...(cm.reactions?.find((r) => r.emoji === e)?.by ?? [])]]));
+    for (const p of reacting.values()) {
+      if (p.comment !== cm.id || !opts.me) continue;
+      const list = by.get(p.emoji)!.filter((b) => b !== opts.me);
+      if (p.on) list.push(opts.me);
+      by.set(p.emoji, list);
+    }
+    return [...by].filter(([, list]) => list.length).map(([emoji, list]) => ({ emoji, by: list }));
+  }
+
+  function react(comment: string, emoji: string, on: boolean) {
+    const id = cid();
+    if (!opts.send({ t: "react", cid: id, comment, emoji, on })) return;
+    reacting.set(id, { comment, emoji, on });
+    // A workspace still running the code from before a deploy doesn't know this message and never answers it.
+    setTimeout(() => {
+      if (!reacting.delete(id)) return;
+      toast("Reaction not saved. Try again.");
+      render();
+    }, 8000);
+    render();
+  }
+
+  function reactMenu(cm: ThreadComment, reactions: NonNullable<ThreadComment["reactions"]>): HTMLElement {
+    const pop = el("div", "react-pop");
+    const menu = el("div", "react-menu");
+    menu.setAttribute("role", "menu");
+    menu.setAttribute("aria-label", "React");
+    for (const [emoji, name] of Object.entries(REACTIONS)) {
+      const mine = opts.me !== null && Boolean(reactions.find((r) => r.emoji === emoji)?.by.includes(opts.me));
+      const b = el("button");
+      b.type = "button";
+      b.textContent = emoji;
+      b.setAttribute("role", "menuitemcheckbox");
+      b.setAttribute("aria-checked", String(mine));
+      b.setAttribute("aria-label", name);
+      b.title = name;
+      b.addEventListener("click", () => {
+        closeReact(true);
+        react(cm.id, emoji, !mine);
+      });
+      menu.append(b);
+    }
+    menu.addEventListener("keydown", (e) => {
+      const items = [...menu.querySelectorAll<HTMLElement>("button")];
+      const at = items.indexOf(document.activeElement as HTMLElement);
+      const to = e.key === "ArrowRight" ? at + 1 : e.key === "ArrowLeft" ? at - 1 : e.key === "Home" ? 0 : e.key === "End" ? items.length - 1 : null;
+      if (to !== null) {
+        e.preventDefault();
+        items[(to + items.length) % items.length].focus();
+      } else if (e.key === "Escape") {
+        // Closes the menu only; the drawer stays.
+        e.preventDefault();
+        e.stopPropagation();
+        closeReact(true);
+      } else if (e.key === "Tab") closeReact(false);
+    });
+    pop.append(menu);
+    // Who reacted, in words: a chip's tooltip never shows on a touch screen.
+    if (reactions.length) {
+      const who = el("div", "react-who");
+      for (const r of reactions) {
+        const line = el("div");
+        const names = el("span");
+        names.textContent = namesOf(r.by);
+        line.append(r.emoji, names);
+        who.append(line);
+      }
+      pop.append(who);
+    }
+    return pop;
+  }
+
+  function openReact(comment: string) {
+    closeReact(false);
+    const row = panel.querySelector<HTMLElement>(`[data-comment="${CSS.escape(comment)}"]`);
+    const cm = [...threads.values()].flatMap((t) => t.comments).find((c) => c.id === comment);
+    if (!row || !cm) return;
+    reactOpen = comment;
+    const pop = reactMenu(cm, reactionsOf(cm));
+    row.append(pop);
+    row.querySelector(".react-add")?.setAttribute("aria-expanded", "true");
+    pop.scrollIntoView({ block: "nearest" });
+    pop.querySelector<HTMLElement>("button")?.focus({ preventScroll: true });
+  }
+
+  function closeReact(refocus: boolean) {
+    if (!reactOpen) return;
+    const row = panel.querySelector<HTMLElement>(`[data-comment="${CSS.escape(reactOpen)}"]`);
+    reactOpen = null;
+    const pop = row?.querySelector<HTMLElement>(".react-pop");
+    const add = row?.querySelector<HTMLElement>(".react-add");
+    add?.setAttribute("aria-expanded", "false");
+    if (refocus) add?.focus();
+    if (!pop) return;
+    // Hidden first, so it shrinks back to the button; then out of the page.
+    pop.hidden = true;
+    setTimeout(() => pop.remove(), motionMs("base"));
+  }
+
+  document.addEventListener("pointerdown", (e) => {
+    if (reactOpen && !(e.target as Element).closest?.(".react-pop, .react-add")) closeReact(false);
+  });
+  // A press on the page lands in the artifact's frame, which this document only hears of as losing the focus.
+  window.addEventListener("blur", () => closeReact(false));
 
   function composer(anchor: Anchor | null): HTMLElement {
     const c = el("article", "thread is-draft");
@@ -493,14 +650,25 @@ export function createDrawer(panel: HTMLElement, toggle: HTMLButtonElement, opts
       if (isOpen()) markRead();
     },
     upsert(t: Thread) {
+      const had = new Set(threads.get(t.id)?.comments.flatMap((c) => (c.reactions ?? []).flatMap((r) => r.by.map((by) => `${c.id} ${r.emoji} ${by}`))));
+      const known = threads.has(t.id);
       if (!t.comments.length) threads.delete(t.id);
       else threads.set(t.id, t);
       for (const c of t.comments) {
-        if (c.by.includes("@") && !people.some((p) => p.email === c.by)) people = [...people, { email: c.by, name: null }];
+        for (const by of [c.by, ...(c.reactions ?? []).flatMap((r) => r.by)]) {
+          if (by.includes("@") && !people.some((p) => p.email === by)) people = [...people, { email: by, name: null }];
+        }
       }
       opts.onThreads(visibleThreads());
       render();
       if (isOpen()) markRead();
+      // Someone else's reaction reaching the page glows on its chip. No sound: a reaction is quieter than a comment.
+      if (!known) return;
+      for (const c of t.comments) {
+        for (const r of c.reactions ?? []) {
+          if (r.by.some((by) => by !== opts.me && !had.has(`${c.id} ${r.emoji} ${by}`))) move(panel.querySelector(`[data-key="${reactKey(c.id, r.emoji)}"]`), "glow");
+        }
+      }
     },
     setPlacement(placed: PlacedAnchor[]) {
       // The frame is the artifact's own code: take a label from it only as a short string.
@@ -543,14 +711,22 @@ export function createDrawer(panel: HTMLElement, toggle: HTMLButtonElement, opts
       if (card) focusCardEl(card);
       else panel.querySelector<HTMLElement>("button.add-page, textarea, button")?.focus();
     },
-    /** A comment was saved: forget its text. */
+    /** A comment or reaction was saved: forget its text, and show the reaction as the server has it. */
     sent(cid: string) {
       unsaved.delete(cid);
+      reacting.delete(cid);
     },
-    /** A comment was rejected: put its text back where it was typed (unless something new is being typed there). */
-    failed(cid: string) {
+    /**
+     * A comment was rejected: put its text back where it was typed (unless something new is being typed there).
+     * A rejected reaction comes off its chip. Says which it was, for the status line.
+     */
+    failed(cid: string): "reaction" | "comment" {
+      if (reacting.delete(cid)) {
+        render();
+        return "reaction";
+      }
       const lost = unsaved.get(cid);
-      if (!lost) return;
+      if (!lost) return "comment";
       unsaved.delete(cid);
       if ("thread" in lost) {
         filter = threads.get(lost.thread)?.resolved ? "resolved" : "open";
@@ -559,6 +735,7 @@ export function createDrawer(panel: HTMLElement, toggle: HTMLButtonElement, opts
       } else if (!draft?.text?.trim()) draft = { anchor: lost.anchor, text: lost.text };
       if (isOpen()) render();
       else setOpen(true);
+      return "comment";
     },
     unread: unreadCount,
   };
@@ -568,6 +745,8 @@ export function createDrawer(panel: HTMLElement, toggle: HTMLButtonElement, opts
 
 // Drawn, not typed: "✕" and "✦" come from fallback fonts and sit off-center in their boxes.
 const X_ICON = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>`;
+
+const REACT_ICON = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20.5 12a8.5 8.5 0 1 1-8.5-8.5M8.5 14.5a4.5 4.5 0 0 0 7 0M9 10h.01M15 10h.01M19 2.5v5M16.5 5h5"/></svg>`;
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, className = ""): HTMLElementTagNameMap[K] {
   const e = document.createElement(tag);

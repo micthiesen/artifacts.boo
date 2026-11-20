@@ -263,7 +263,7 @@ const drawer = createDrawer(document.getElementById("threads")!, toggle, {
   readSeq: boot.readSeq ?? 0,
   send: (msg) => {
     if (socket?.readyState !== WebSocket.OPEN) {
-      setStatus("Offline: comment not sent", "error");
+      setStatus(msg.t === "react" ? "Offline: reaction not sent" : "Offline: comment not sent", "error");
       return false;
     }
     if (msg.t !== "set" && "cid" in msg) pendingComments.add(msg.cid);
@@ -447,9 +447,9 @@ function connect() {
       }
       case "rejected": {
         if (pendingComments.delete(msg.cid)) {
-          setStatus(`Comment not saved: ${msg.reason}`, "error");
-          // A comment's text goes back into its box, so nothing typed is lost.
-          drawer.failed(msg.cid);
+          // A comment's text goes back into its box, so nothing typed is lost; a reaction comes off its chip.
+          const what = drawer.failed(msg.cid);
+          setStatus(`${what === "reaction" ? "Reaction" : "Comment"} not saved: ${msg.reason}`, "error");
           break;
         }
         const rejected = pending.get(msg.cid);

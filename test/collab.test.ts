@@ -87,6 +87,77 @@ test("viewers can start threads; replies reopen; only authors or editors resolve
   expect(last(anon)).toMatchObject({ t: "rejected" });
 });
 
+test("reactions: anyone who can comment toggles one of the fixed set; nobody is notified and nothing reopens", async () => {
+  const id = await make();
+  await ntfy(OWNER);
+  await ntfy(SAM);
+  h.hub.setWatch(OWNER, id, "all");
+  const dana = await connect(h, { id, email: DANA, role: "view" });
+  const sam = await connect(h, { id, email: SAM, role: "edit" });
+  await sam.send({ t: "comment", cid: "c1", text: "Shipping Friday", anchor: null });
+  const thread = last(dana).thread;
+  const comment = thread.comments[0].id as string;
+  await sam.send({ t: "resolve", cid: "r1", thread: thread.id, resolved: true });
+  await deliver();
+
+  // A viewer reacts; adding the same one twice is one reaction.
+  await dana.send({ t: "react", cid: "x1", comment, emoji: "👍", on: true });
+  expect(last(dana)).toMatchObject({ t: "thread", cid: "x1" });
+  await dana.send({ t: "react", cid: "x2", comment, emoji: "👍", on: true });
+  await sam.send({ t: "react", cid: "x3", comment, emoji: "👍", on: true });
+  await sam.send({ t: "react", cid: "x4", comment, emoji: "✅", on: true });
+  expect(last(dana).thread.comments[0].reactions).toEqual([{ emoji: "👍", by: [DANA, SAM] }, { emoji: "✅", by: [SAM] }]);
+  // Quiet: the thread stays resolved, no comment was added and nothing is queued to send.
+  expect(last(dana).thread.resolved).not.toBeNull();
+  expect(last(dana).thread.comments).toHaveLength(1);
+  expect(await deliver()).toEqual([]);
+  // One activity line per reaction added, so an agent sees the acknowledgment.
+  const reacts = h.hub.activity({ id }).events.filter((e: any) => e.type === "react");
+  expect(reacts.map((e: any) => [e.actor, e.emoji])).toEqual([[DANA, "👍"], [SAM, "👍"], [SAM, "✅"]]);
+
+  // Taking it back removes only your own.
+  await dana.send({ t: "react", cid: "x5", comment, emoji: "👍", on: false });
+  expect(last(sam).thread.comments[0].reactions).toEqual([{ emoji: "👍", by: [SAM] }, { emoji: "✅", by: [SAM] }]);
+  // Pressing it on again within the minute doesn't log a second line.
+  await dana.send({ t: "react", cid: "x6", comment, emoji: "👍", on: true });
+  expect(h.hub.activity({ id }).events.filter((e: any) => e.type === "react")).toHaveLength(3);
+
+  // Not in the set, not a comment, or not signed in: refused.
+  await dana.send({ t: "react", cid: "x7", comment, emoji: "🔥", on: true });
+  expect(last(dana)).toMatchObject({ t: "rejected", cid: "x7" });
+  await dana.send({ t: "react", cid: "x8", comment: "cnope", emoji: "👍", on: true });
+  expect(last(dana)).toMatchObject({ t: "rejected", cid: "x8" });
+  const anon = await connect(h, { id, email: null, role: "view" });
+  await anon.send({ t: "react", cid: "x9", comment, emoji: "👍", on: true });
+  expect(last(anon)).toMatchObject({ t: "rejected", cid: "x9" });
+
+  // A fresh connection gets them with the threads, and the people who reacted by name.
+  const owner = await connect(h, { id, email: OWNER, role: "owner" });
+  const all = owner.socket.messages.find((m: any) => m.t === "threads") as any;
+  expect(all.threads[0].comments[0].reactions[0]).toEqual({ emoji: "👍", by: [SAM, DANA] });
+  expect(all.people.map((p: any) => p.email)).toContain(DANA);
+});
+
+test("reactions go with their comment, and are limited per minute", async () => {
+  const id = await make();
+  const t = h.hub.addComment(id, SAM, { text: "one" }, ORIGIN);
+  const second = h.hub.addComment(id, DANA, { thread: t.id, text: "two" }, ORIGIN).comments[1].id;
+  h.hub.react(id, SAM, second, "🎉", true);
+  h.hub.react(id, SAM, t.comments[0].id, "👀", true);
+  const left = h.hub.deleteComment(id, DANA, second, "view")!;
+  expect(left.comments.map((c) => c.reactions)).toEqual([[{ emoji: "👀", by: [SAM] }]]);
+  expect(() => h.hub.react(id, SAM, second, "🎉", true)).toThrow("deleted");
+  expect(h.hub.exportPage("reactions", 0).rows).toHaveLength(1);
+
+  for (let i = 0; i < 58; i++) h.hub.react(id, SAM, t.comments[0].id, "👀", i % 2 === 1);
+  expect(() => h.hub.react(id, SAM, t.comments[0].id, "👀", true)).toThrow("too many reactions");
+  // Someone else is not held up by it.
+  h.hub.react(id, DANA, t.comments[0].id, "❤️", true);
+
+  h.hub.delete(id);
+  expect(h.hub.exportPage("reactions", 0).rows).toEqual([]);
+});
+
 test("collab keys are stamped: no forged votes or edits of others' comments", async () => {
   const id = await make();
   const sam = await connect(h, { id, email: SAM, role: "edit" });

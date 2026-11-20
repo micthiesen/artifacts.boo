@@ -67,7 +67,18 @@ check("viewer sees thread addressed in v2 live", Boolean(resolvedMsg));
 check("viewer gets a live version notice", Boolean(await v.next((m) => m.t === "version" && m.version === 2 && /per seat/.test(m.note))));
 const reply = await call("artifact_comment", { id, thread: threadId, text: "Yes, per seat. Updated the page." });
 check("agent reply", !reply.isError && reply.structuredContent.thread.comments.at(-1).by === "agent", reply.content);
+// ---- reactions: quiet acknowledgments over the socket, visible to agents -------------
+const firstComment = made?.thread?.comments?.[0]?.id as string;
+v.send({ t: "react", cid: "x1", comment: firstComment, emoji: "👍", on: true });
+const reacted = await v.next((m) => m.t === "thread" && m.cid === "x1");
+check("a viewer reacts to a comment", reacted?.thread?.comments?.[0]?.reactions?.[0]?.by?.[0] === viewer, reacted ?? v.messages.slice(-3));
+check("a reaction leaves the thread addressed and adds no comment", reacted?.thread?.addressedIn === 2 && reacted?.thread?.comments?.length === 2, reacted?.thread);
+v.send({ t: "react", cid: "x2", comment: firstComment, emoji: "🔥", on: true });
+check("an emoji outside the set is refused", Boolean(await v.next((m) => m.t === "rejected" && m.cid === "x2")));
+const withReactions = await call("artifact_threads", { id, thread: threadId, includeResolved: true });
+check("artifact_threads shows the reaction and who gave it", (withReactions.content[0].text as string).includes(`[reactions: 👍 ${viewer}]`), withReactions.content);
 const later = await call("artifact_activity", { id, since: cursor });
+check("activity has the reaction", /reacted "👍" to a comment in/.test(later.content[0].text), later.content[0].text);
 check("activity since cursor has version, resolve and reply", /saved v2: "Clarified/.test(later.content[0].text) && /replied/.test(later.content[0].text), later.content[0].text);
 
 // ---- changed since your last visit ---------------------------------------------------

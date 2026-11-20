@@ -19,6 +19,22 @@ const host = new URL(apex).hostname;
 const ownerApex = await cookieFor(owner, host);
 const ownerHere = await cookieFor(owner);
 const guestHere = await cookieFor(guest);
+// A whole-page comment carrying every reaction, opened in the drawer by its link.
+const ws = new WebSocket(`${origin.replace(/^http/, "ws")}/a/${id}/sync`, { headers: { Cookie: guestHere, Origin: origin } } as never);
+const got: any[] = [];
+ws.addEventListener("message", (e) => got.push(JSON.parse(String(e.data))));
+await new Promise((resolve, reject) => (ws.addEventListener("open", resolve), ws.addEventListener("error", reject)));
+const wait = async (cid: string) => {
+  for (let i = 0; i < 80 && !got.some((m) => m.cid === cid); i++) await Bun.sleep(100);
+  return got.find((m) => m.cid === cid);
+};
+ws.send(JSON.stringify({ t: "comment", cid: "c1", anchor: null, text: long }));
+const thread = (await wait("c1"))?.thread;
+const emoji = ["👍", "❤️", "🎉", "😄", "👀", "✅"];
+for (const [i, e] of emoji.entries()) ws.send(JSON.stringify({ t: "react", cid: `x${i}`, comment: thread?.comments[0].id, emoji: e, on: true }));
+const reacted = (await wait("x5"))?.thread;
+check("a comment with all six reactions", reacted?.comments[0].reactions?.length === 6, reacted ?? got.slice(-3));
+ws.close();
 const pages: [string, string, string | undefined][] = [
   ["splash", `${apex}/`, undefined],
   ["sign-in", `${apex}/login`, undefined],
@@ -37,6 +53,7 @@ const pages: [string, string, string | undefined][] = [
   ["workspace notifications", `${origin}/me`, ownerHere],
   ["artifact (owner)", `${origin}/a/${id}`, ownerHere],
   ["artifact (guest)", `${origin}/a/${id}`, guestHere],
+  ["comments drawer with reactions", `${origin}/a/${id}#thread=${thread?.id}`, ownerHere],
 ];
 // The pricing page exists only while billing is on.
 if ((await fetch(`${apex}/pricing`)).status === 200) pages.push(["pricing", `${apex}/pricing`, undefined]);

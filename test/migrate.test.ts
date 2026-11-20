@@ -31,7 +31,8 @@ test("a failing migration leaves the schema at the last good version", () => {
 test("members from before sign-ins were recorded count as signed in when they've opened or connected something", async () => {
   const { MIGRATIONS } = await import("../src/worker/hub.ts");
   const ctx = new FakeCtx();
-  migrate(ctx.storage as never, MIGRATIONS.slice(0, -1));
+  // Up to the migration before the one that fills last_seen_at in, wherever later ones put it.
+  migrate(ctx.storage as never, MIGRATIONS.slice(0, MIGRATIONS.findIndex((m) => String(m).includes("last_seen_at = COALESCE"))));
   const sql = ctx.sqlStorage;
   for (const e of ["viewer@x.com", "agent@x.com", "never@x.com"]) sql.exec(`INSERT INTO members (email, role, added_at) VALUES (?, 'admin', '2026-01-01')`, e);
   sql.exec(`INSERT INTO seen (email, artifact_id, version, at) VALUES ('viewer@x.com', 'a1', 1, '2026-02-01')`);
@@ -39,4 +40,19 @@ test("members from before sign-ins were recorded count as signed in when they've
   migrate(ctx.storage as never, MIGRATIONS);
   const seen = Object.fromEntries(sql.exec(`SELECT email, last_seen_at FROM members`).toArray().map((r) => [r.email, r.last_seen_at]));
   expect(seen).toEqual({ "viewer@x.com": "2026-02-01", "agent@x.com": "2026-03-01", "never@x.com": null });
+});
+
+test("reactions arrive as a new table: threads and comments from before are untouched", async () => {
+  const { MIGRATIONS } = await import("../src/worker/hub.ts");
+  const ctx = new FakeCtx();
+  const at = MIGRATIONS.findIndex((m) => String(m).includes("CREATE TABLE reactions"));
+  migrate(ctx.storage as never, MIGRATIONS.slice(0, at));
+  const sql = ctx.sqlStorage;
+  sql.exec(`INSERT INTO threads (id, artifact_id, anchor, version, by, at) VALUES ('t1', 'a1', NULL, 1, 'a@x.com', '2026-01-01')`);
+  sql.exec(`INSERT INTO comments (id, thread_id, artifact_id, by, text, at, seq) VALUES ('c1', 't1', 'a1', 'a@x.com', 'hello', '2026-01-01', 1)`);
+  const before = sql.exec(`SELECT * FROM comments`).toArray();
+  migrate(ctx.storage as never, MIGRATIONS);
+  expect(sql.exec(`SELECT * FROM comments`).toArray()).toEqual(before);
+  expect(sql.exec(`SELECT COUNT(*) AS n FROM threads`).toArray()[0].n).toBe(1);
+  expect(sql.exec(`SELECT COUNT(*) AS n FROM reactions`).toArray()[0].n).toBe(0);
 });
