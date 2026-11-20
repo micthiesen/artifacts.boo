@@ -141,11 +141,12 @@ describe("sound", () => {
     const players = sources.filter((s) => /\bplaySound\b/.test(s.text)).map((s) => s.path).sort();
     expect(players).toEqual([join("src", "shared", "motion.ts"), join("src", "shared", "sound.ts")]);
     // In motion.ts, the one call is inside cue(), after its move().
-    const motion = sources.find((s) => s.path.endsWith("motion.ts"))!.text;
+    // By full path: wisp-motion.ts ends the same way, and which comes first depends on the directory listing.
+    const motion = sources.find((s) => s.path === join("src", "shared", "motion.ts"))!.text;
     expect(motion.match(/playSound\(/g)).toHaveLength(1);
     expect(motion).toMatch(/export function cue\([^)]*\) \{[^}]*if \(!move\([^}]*\) return;\s*playSound\(sound\);\s*\}/);
     // In sound.ts, sound starts only in start(), which only playSound() calls.
-    const sound = sources.find((s) => s.path.endsWith("sound.ts"))!.text;
+    const sound = sources.find((s) => s.path === join("src", "shared", "sound.ts"))!.text;
     expect(sound.match(/\.start\(/g)).toHaveLength(1);
     expect(sound.match(/\bstart\(name\)/g)).toHaveLength(2);
     expect(sound).not.toMatch(/export function start\b/);
