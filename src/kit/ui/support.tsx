@@ -1,11 +1,12 @@
 // A support case's page (in the operator's support workspace, shared with the
 // person who reported it): what they reported, where it stands, and, once a fix
 // is out, whether it helped. The conversation is the page's comment thread. The
-// status (`case/status`) is written only by the service, never from the page.
+// status (`case/status`), the plan (`case/plan`) and the log (`case/log`) are
+// written only by the service, never from the page.
 import * as React from "react";
 import { useData, useShared, useViewer } from "../hooks.ts";
 import { post } from "../store.ts";
-import { Badge, Button } from "./primitives.tsx";
+import { Badge, Button, Textarea } from "./primitives.tsx";
 import { cn, displayName, relativeTime, useNow } from "./utils.ts";
 
 type CaseData = {
@@ -37,16 +38,23 @@ const STATUS: Record<string, { label: string; tone: "neutral" | "positive" | "ca
   wont_fix: { label: "Closed", tone: "neutral", text: "Closed without a change; the conversation says why." },
   duplicate: { label: "Being handled with another report", tone: "neutral", text: "Someone reported the same thing, and we're working on it together. You'll hear about it here." },
 };
+type LogEntry = { at: string; actor?: string; event?: string; status?: string };
 const KIND = { bug: "Problem", feature: "Idea", question: "Question" } as const;
 
 export function SupportCase({ data: path = "case.json" }: { data?: string }) {
   const data = useData<CaseData>(path);
   const [status] = useShared<CaseStatus | null>("case/status", null);
+  const [plan] = useShared<{ text?: string } | null>("case/plan", null);
+  const [log] = useShared<LogEntry[] | null>("case/log", null);
   const viewer = useViewer();
   const now = useNow();
   if (!data) return null;
   const s = STATUS[status?.status ?? "new"] ?? STATUS.new;
   const context = Object.entries(data.context ?? {}).filter(([, v]) => v);
+  // A request from before the log has only its status changes; they come first, then the log from where it starts.
+  const logged = Array.isArray(log) ? log : [];
+  const history: LogEntry[] = [...(status?.history ?? []).filter((h) => !logged.length || h.at < logged[0].at), ...logged];
+  const who = (actor?: string) => (!actor ? "" : actor === "agent" ? "Support" : actor === "system" ? "Automatic" : actor === viewer.email ? "You" : displayName(actor));
   return (
     <div className="flex flex-col gap-6">
       <header>
@@ -79,6 +87,13 @@ export function SupportCase({ data: path = "case.json" }: { data?: string }) {
 
       {(status?.status === "fix_deployed" || status?.status === "resolved") && viewer.email === data.reporter && <Confirm reporter={data.reporter} />}
 
+      {plan?.text && (
+        <section>
+          <h2 className="mb-2 text-[13px] font-medium tracking-[0.06em] text-muted-foreground uppercase">Plan</h2>
+          <p className="m-0 text-[15px] leading-relaxed break-words whitespace-pre-wrap">{plan.text}</p>
+        </section>
+      )}
+
       {(context.length > 0 || data.error) && (
         <section>
           <h2 className="mb-2 text-[13px] font-medium tracking-[0.06em] text-muted-foreground uppercase">Shared with the report</h2>
@@ -101,14 +116,19 @@ export function SupportCase({ data: path = "case.json" }: { data?: string }) {
         </section>
       )}
 
-      {status?.history && status.history.length > 1 && (
+      {history.length > 1 && (
         <section>
           <h2 className="mb-2 text-[13px] font-medium tracking-[0.06em] text-muted-foreground uppercase">History</h2>
           <ol className="m-0 flex list-none flex-col gap-1 p-0 text-[14px]">
-            {status.history.map((h, i) => (
+            {history.map((h, i) => (
               <li key={i} className="flex gap-3">
-                <span className="w-28 shrink-0 text-muted-foreground">{new Date(h.at).toLocaleDateString(undefined, { month: "short", day: "numeric" })}</span>
-                <span>{(STATUS[h.status] ?? STATUS.new).label}</span>
+                <span className="w-28 shrink-0 text-muted-foreground tabular-nums">
+                  {new Date(h.at).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
+                </span>
+                <span className="min-w-0 break-words">
+                  {h.status ? (STATUS[h.status] ?? STATUS.new).label : h.event}
+                  {who(h.actor) && <span className="text-muted-foreground"> · {who(h.actor)}</span>}
+                </span>
               </li>
             ))}
           </ol>
@@ -118,26 +138,93 @@ export function SupportCase({ data: path = "case.json" }: { data?: string }) {
   );
 }
 
-/** "Did this fix it?": the reporter's own answer, stored as their decision so the assistant hears of it. */
+/**
+ * "Did this fix it?": the reporter's own answer, stored as their decision so the assistant hears of it. Yes
+ * resolves the request; no needs a note saying what's still wrong, and reopens it.
+ */
 function Confirm({ reporter }: { reporter: string }) {
-  const [answer, setAnswer] = useShared<{ decision?: string; at?: number } | null>(`approve/fixed/${reporter}`, null);
+  const [answer, setAnswer] = useShared<{ decision?: string; note?: string; at?: number } | null>(`approve/fixed/${reporter}`, null);
+  const [asking, setAsking] = React.useState(false);
+  const [note, setNote] = React.useState("");
+  const [missing, setMissing] = React.useState(false);
+  const field = React.useRef<HTMLTextAreaElement>(null);
+  const no = React.useRef<HTMLButtonElement>(null);
+  const id = React.useId();
   const said = answer?.decision;
+  React.useEffect(() => {
+    if (asking && !said) field.current?.focus();
+  }, [asking, said]);
+  const send = (e: React.FormEvent) => {
+    e.preventDefault();
+    const text = note.trim();
+    if (!text) {
+      setMissing(true);
+      field.current?.focus();
+      return;
+    }
+    // The text stays in the field: if the answer is refused and comes back, nothing they typed is lost.
+    setAnswer({ decision: "changes", note: text });
+  };
   return (
     <section className={cn("rounded-xl border p-4", said === "approve" ? "border-positive/40" : "border-border")}>
       <p className="m-0 font-medium">Did this fix it?</p>
       {said ? (
-        <p className="mt-1 mb-0 text-[14px] text-muted-foreground">
-          {said === "approve" ? "Thanks for confirming." : "Thanks; we'll keep at it. Add anything useful in the conversation."}{" "}
-          <button type="button" className="cursor-pointer text-primary underline" onClick={() => setAnswer(null)}>
-            Change
-          </button>
-        </p>
+        <>
+          <p className="mt-1 mb-0 text-[14px] text-muted-foreground">
+            {said === "approve" ? "Thanks for confirming." : "Thanks; we'll keep at it. Add anything useful in the conversation."}{" "}
+            <button type="button" className="cursor-pointer text-primary underline" onClick={() => setAnswer(null)}>
+              Change
+            </button>
+          </p>
+          {said === "changes" && answer?.note && <p className="mt-2 mb-0 text-[14px] break-words whitespace-pre-wrap">You said: {answer.note}</p>}
+        </>
+      ) : asking ? (
+        <form className="mt-2 flex flex-col gap-2" onSubmit={send} noValidate>
+          <label htmlFor={id} className="text-[14px]">
+            What's still wrong?
+          </label>
+          <Textarea
+            ref={field}
+            id={id}
+            value={note}
+            maxLength={2000}
+            rows={3}
+            aria-invalid={missing || undefined}
+            aria-describedby={missing ? `${id}-error` : undefined}
+            onChange={(e) => {
+              setNote(e.target.value);
+              if (e.target.value.trim()) setMissing(false);
+            }}
+          />
+          {missing && (
+            <p id={`${id}-error`} role="alert" className="m-0 text-[14px] text-negative">
+              Say what's still wrong, so we know where to look.
+            </p>
+          )}
+          <div className="flex flex-wrap gap-2">
+            <Button type="submit" size="sm">
+              Send
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              onClick={() => {
+                setAsking(false);
+                // Back to where they came from, once the buttons are in the page again.
+                requestAnimationFrame(() => no.current?.focus());
+              }}
+            >
+              Cancel
+            </Button>
+          </div>
+        </form>
       ) : (
         <div className="mt-2 flex flex-wrap gap-2">
           <Button type="button" size="sm" onClick={() => setAnswer({ decision: "approve" })}>
             Yes, it's fixed
           </Button>
-          <Button type="button" size="sm" variant="secondary" onClick={() => setAnswer({ decision: "changes" })}>
+          <Button ref={no} type="button" size="sm" variant="secondary" onClick={() => setAsking(true)}>
             No, still a problem
           </Button>
         </div>

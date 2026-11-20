@@ -83,6 +83,8 @@ export default Alchemy.Stack(
     const creemKey = yield* optional("CREEM_API_KEY");
     const creemSecret = yield* optional("CREEM_WEBHOOK_SECRET");
     const creemProduct = yield* optional("CREEM_PRODUCT_ID");
+    // Days a released fix waits for the person's answer before its support request resolves by itself (default 7).
+    const autoResolveDays = yield* optional("SUPPORT_AUTO_RESOLVE_DAYS");
 
     const worker = yield* Cloudflare.Worker("Artifacts", {
       name,
@@ -112,6 +114,7 @@ export default Alchemy.Stack(
         OPERATOR_TOKEN: yield* Config.Redacted("OPERATOR_TOKEN"),
         OPERATOR_EMAILS: operators,
         ...(supportEmail ? { SUPPORT_EMAIL: supportEmail } : {}),
+        ...(autoResolveDays ? { SUPPORT_AUTO_RESOLVE_DAYS: autoResolveDays } : {}),
         APEX_HOST: apexHost,
         APEX_ORIGIN: `https://${apexHost}`,
         WORKSPACE_SUFFIX: workspaceSuffix,

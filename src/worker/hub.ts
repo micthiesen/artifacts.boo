@@ -16,6 +16,7 @@ import { DEFAULT_PLAN, PLANS, isPlan, type PlanId } from "./plans.ts";
 import { TEAM_PRICE } from "./billing.ts";
 import { cleanQuery, listing, queryWords, type InContent } from "./listing.ts";
 import { ops, type OpsEvent } from "./ops.ts";
+import { fixAnswered, resolveUnanswered, SUPPORT_SLUG, type SupportEnv } from "./support.ts";
 import {
   EVENT_ERRORS,
   EventsFailure,
@@ -159,7 +160,7 @@ export type HubApi = AsyncMethods<
     | "setHostAllowed" | "sources" | "setSource" | "removeSource" | "refreshSources" | "shareSummaries" | "exportPage"
     | "importBegin" | "importRows" | "importEnd" | "backup" | "backups" | "restore" | "job" | "lastJobError" | "cancelJob" | "threads" | "addComment" | "endSessions" | "setFreeTeam"
     | "resolveThread" | "deleteComment" | "activity" | "visit" | "readers" | "previewInfo" | "previewImage" | "watches" | "setWatch"
-    | "joinDomains" | "setJoinDomains" | "setJoinDomain" | "autoJoin" | "eventsPoll" | "eventsSubscribe" | "eventsUnsubscribe" | "plan" | "setPlan" | "requestBackup" | "setPin" | "dismissSince" | "watchDefault" | "setWatchDefault" | "visibleCount"
+    | "joinDomains" | "setJoinDomains" | "setJoinDomain" | "autoJoin" | "eventsPoll" | "eventsSubscribe" | "eventsUnsubscribe" | "plan" | "setPlan" | "requestBackup" | "setPin" | "dismissSince" | "watchDefault" | "setWatchDefault" | "visibleCount" | "setFixCheckAt"
   >
 > & { fetch(request: Request): Promise<Response> };
 
@@ -1477,6 +1478,10 @@ export class Workspace extends DurableObject {
         if (opts.agent && RESPONSE_KEY.test(key)) throw new HubError(`${key.split("/")[0] === "approve" ? "decisions" : "form responses"} can only be made by people on the page`);
         // A support case's status is the service's to set (through the support tools), never a person's or an agent's.
         if (key.startsWith("case/") && by !== null) throw new HubError("a support case's status is set through the support tools");
+        // "No, still a problem" on a support request says what's still wrong, so there's something to work from.
+        if (by && key === `approve/fixed/${by}` && raw && typeof raw === "object" && !Array.isArray(raw) && raw.decision === "changes" && this.info().slug === SUPPORT_SLUG) {
+          if (typeof raw.note !== "string" || !raw.note.trim()) throw new HubError("say what's still wrong, so we know where to look");
+        }
         // Ledger entries say who added them, so agents can't add or change one; they may remove one (after folding it into a data file).
         if (opts.agent && key.startsWith("ledger/") && raw !== null) throw new HubError("ledger entries are added by people on the page; keep your own rows in the Ledger's data file");
         // A <Decision> is answered by a person on the page; the agent asks the question and reads the answer.
@@ -1522,6 +1527,15 @@ export class Workspace extends DurableObject {
         .toArray()
         .map((r) => r.by as string);
       this.notifyComment(id, by, { thread: `comments/${scope}`, text, participants: earlier, reply: false, origin: opts.origin });
+    }
+    // On a support request, the person's answer about a fix resolves or reopens it.
+    for (const a of applied) {
+      if (!by || a.key !== `approve/fixed/${by}` || !a.value || this.info().slug !== SUPPORT_SLUG) continue;
+      this.ctx.waitUntil(
+        fixAnswered(this.hubEnv as unknown as SupportEnv, this as unknown as HubApi, id, by, a.value).catch((err) =>
+          console.error(JSON.stringify({ ops: "support_answer_failed", slug: SUPPORT_SLUG, artifact: id, message: (err as Error).message })),
+        ),
+      );
     }
     // A decision or form response is what the owner asked for, so it notifies like a comment.
     for (const a of applied) {
@@ -1679,10 +1693,26 @@ export class Workspace extends DurableObject {
     });
     await step("notifications", () => this.deliverDue());
     await step("events", () => this.deliverEvents());
+    if (Number(this.setting("fix_check_at") ?? NaN) <= Date.now()) {
+      await step("support fix checks", async () => {
+        // Moved on first, so a failure here comes back in an hour rather than at once.
+        this.setSetting("fix_check_at", String(Date.now() + 3_600_000));
+        await resolveUnanswered(this.hubEnv as unknown as SupportEnv, this as unknown as HubApi);
+      });
+    }
     await step("sources", async () => {
       const sourcesAt = this.nextSourceAt();
       if (sourcesAt !== null && sourcesAt <= Date.now()) await this.refreshSources();
     });
+  }
+
+  /**
+   * The support workspace only: when the oldest released fix nobody has answered about resolves by itself
+   * (null: none is waiting, so nothing wakes for it).
+   */
+  async setFixCheckAt(at: number | null) {
+    this.setSetting("fix_check_at", at === null ? null : String(at));
+    await this.armAlarm();
   }
 
   /** A restore or a scripted import is replacing the data: no requests or alarm work until it's done. */
@@ -1725,6 +1755,8 @@ export class Workspace extends DurableObject {
     if (backup) times.push(Number(backup));
     const prune = this.setting("backup_prune_at");
     if (prune) times.push(Number(prune));
+    const fixCheck = this.setting("fix_check_at");
+    if (fixCheck) times.push(Number(fixCheck));
     const job = this.job();
     if (job && job.kind !== "import") times.push(job.retryAt ? Date.parse(job.retryAt) : Date.now());
     else if (!job && this.setting("jobs_next")) times.push(Date.now());

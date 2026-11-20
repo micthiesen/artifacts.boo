@@ -83,7 +83,15 @@ export type SupportCase = {
   updatedAt: string;
   resolvedAt: string | null;
   reopened: number;
+  /** The approved plan for working it (text or Markdown), shown on the request's page. */
+  plan: string | null;
+  /** What happened to it, oldest first: status changes, the plan, the person's answers, anything the assistant notes. */
+  events: CaseEvent[];
+  /** When the status last changed. */
+  statusAt: string;
 };
+/** One line of a case's log. `actor` is an email, "agent" (the operator's assistant) or "system". */
+export type CaseEvent = { at: string; actor: string; event: string; status?: string };
 export type ErrorGroup = { fp: string; kind: string; place: string; message: string; count: number; firstAt: string; lastAt: string; versions: string[]; browsers: string[]; cases: number[] };
 export type InboxItem = { id: number; at: string; kind: string; title: string; body: string | null; url: string | null; read: boolean };
 
@@ -105,6 +113,9 @@ function toCase(r: Record<string, SqlStorageValue>): SupportCase {
     updatedAt: r.updated_at as string,
     resolvedAt: (r.resolved_at as string | null) ?? null,
     reopened: r.reopened as number,
+    plan: (r.plan as string | null) ?? null,
+    events: r.events ? (JSON.parse(r.events as string) as CaseEvent[]) : [],
+    statusAt: (r.status_at as string | null) ?? (r.updated_at as string),
   };
 }
 
@@ -145,6 +156,8 @@ export const SYSTEM_SLUGS = new Set(["support"]);
 /** Support cases one person may open a day, and everyone together. */
 const CASES_PER_PERSON_DAY = 5;
 const CASES_PER_DAY = 200;
+/** Lines kept in a case's log; the oldest make way. */
+const CASE_EVENTS_KEEP = 100;
 /** Inbox items kept per person. */
 const INBOX_KEEP = 200;
 /** ...and none older than this. */
@@ -305,6 +318,15 @@ const MIGRATIONS: Migration[] = [
     sql.exec(`
       CREATE TABLE contacted (email TEXT PRIMARY KEY, at TEXT NOT NULL);
       INSERT OR IGNORE INTO contacted (email, at) SELECT DISTINCT email, strftime('%Y-%m-%dT%H:%M:%fZ', 'now') FROM memberships WHERE role IN ('admin', 'member');
+    `),
+  // A support case's approved plan, its log, and when its status last changed (a released fix nobody answers
+  // about resolves after a while, counted from then). Cases from before start with no plan and an empty log.
+  (sql) =>
+    sql.exec(`
+      ALTER TABLE support_cases ADD COLUMN plan TEXT;
+      ALTER TABLE support_cases ADD COLUMN events TEXT;
+      ALTER TABLE support_cases ADD COLUMN status_at TEXT;
+      UPDATE support_cases SET status_at = updated_at;
     `),
 ];
 
@@ -576,8 +598,8 @@ export class Directory extends DurableObject {
     const now = new Date().toISOString();
     const n = this.sql
       .exec(
-        `INSERT INTO support_cases (artifact_id, notes_id, reporter, via_agent, workspace, kind, title, status, error_group, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'new', ?, ?, ?) RETURNING n`,
+        `INSERT INTO support_cases (artifact_id, notes_id, reporter, via_agent, workspace, kind, title, status, error_group, created_at, updated_at, status_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'new', ?, ?, ?, ?) RETURNING n`,
         c.artifactId,
         c.notesId,
         c.reporter,
@@ -588,14 +610,21 @@ export class Directory extends DurableObject {
         c.errorGroup,
         now,
         now,
+        now,
       )
       .one().n as number;
     this.markDirty();
     return n;
   }
 
-  /** Change a case's status or links; returns it as it is now. Moving back from resolved counts as reopened. */
-  updateCase(n: number, patch: { status?: string; duplicateOf?: number | null; fix?: Record<string, unknown> | null; errorGroup?: string | null; title?: string; notesId?: string }): SupportCase | null {
+  /**
+   * Change a case's status, links or plan, and add to its log; returns it as it is now. Moving back from resolved
+   * counts as reopened. Log lines are added here, in one step, so two changes at once both keep theirs.
+   */
+  updateCase(
+    n: number,
+    patch: { status?: string; duplicateOf?: number | null; fix?: Record<string, unknown> | null; errorGroup?: string | null; title?: string; notesId?: string; plan?: string | null; addEvents?: CaseEvent[] },
+  ): SupportCase | null {
     const before = this.supportCase(n);
     if (!before) return null;
     const now = new Date().toISOString();
@@ -603,7 +632,7 @@ export class Directory extends DurableObject {
     const status = patch.status ?? before.status;
     this.sql.exec(
       `UPDATE support_cases SET status = ?, duplicate_of = ?, fix = ?, error_group = ?, title = ?, notes_id = ?, updated_at = ?,
-         resolved_at = ?, reopened = reopened + ? WHERE n = ?`,
+         resolved_at = ?, reopened = reopened + ?, plan = ?, events = ?, status_at = ? WHERE n = ?`,
       status,
       patch.duplicateOf === undefined ? before.duplicateOf : patch.duplicateOf,
       patch.fix === undefined ? (before.fix ? JSON.stringify(before.fix) : null) : patch.fix ? JSON.stringify(patch.fix) : null,
@@ -613,6 +642,9 @@ export class Directory extends DurableObject {
       now,
       closed(status) ? (before.resolvedAt ?? now) : null,
       closed(before.status) && !closed(status) ? 1 : 0,
+      patch.plan === undefined ? before.plan : patch.plan,
+      JSON.stringify([...before.events, ...(patch.addEvents ?? [])].slice(-CASE_EVENTS_KEEP)),
+      status === before.status ? before.statusAt : now,
       n,
     );
     this.markDirty();

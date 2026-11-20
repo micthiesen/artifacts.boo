@@ -88,6 +88,8 @@ export type Env = {
   OPERATOR_EMAILS: string;
   /** Where people write for help (support@<domain> when Email Routing forwards it); else the first operator. */
   SUPPORT_EMAIL?: string;
+  /** Days a released fix waits for the person's answer before its request resolves by itself (default 7). */
+  SUPPORT_AUTO_RESOLVE_DAYS?: string;
   /** The front door, e.g. "artifacts.boo". */
   APEX_HOST: string;
   /** https://<APEX_HOST>, for links in notification emails. */

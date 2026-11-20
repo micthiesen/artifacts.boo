@@ -6,10 +6,14 @@
 // `case/status`, written only here. Announcements to several people go out only
 // once the operator approves them in their inbox. Product errors are grouped by
 // fingerprint (no content, no secrets) and can be attached to a request.
-import type { DirectoryApi, SupportCase } from "./directory.ts";
+// A released fix asks the person whether it worked: "yes" resolves the request,
+// "no" (with a note) reopens it and tells the operator, and no answer resolves
+// it after a while. Each request keeps its approved plan and a log of what
+// happened, both on its page.
+import type { CaseEvent, DirectoryApi, SupportCase } from "./directory.ts";
 import type { HubApi } from "./hub.ts";
 import type { JsonValue } from "../shared/protocol.ts";
-import { sendSupportUpdate } from "./mail.ts";
+import { sendOperatorNote, sendSupportUpdate } from "./mail.ts";
 import { ops } from "./ops.ts";
 import { APP_VERSION } from "./pages.ts";
 
@@ -21,6 +25,8 @@ export type SupportEnv = {
   OPERATOR_EMAILS?: string;
   EMAIL?: SendEmail;
   MAIL_FROM: string;
+  /** Days a released fix waits for the person's answer before the request resolves by itself (default 7). */
+  SUPPORT_AUTO_RESOLVE_DAYS?: string;
 };
 
 export const SUPPORT_SLUG = "support";
@@ -39,6 +45,26 @@ const TELL: Partial<Record<CaseStatus, string>> = {
 };
 const TITLE_MAX = 120;
 const DETAILS_MAX = 5000;
+const PLAN_MAX = 10_000;
+const EVENT_MAX = 300;
+const AUTO_RESOLVE_DAYS = 7;
+/** Linked pages looked at per request: enough for any real report. */
+const LINKS_MAX = 20;
+
+/** A stored time (UTC) as ISO 8601 with its offset written out, so nobody reads it as local time. */
+export function stamp(iso: string): string {
+  return /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d/.test(iso) ? `${iso.slice(0, 19)}+00:00` : iso;
+}
+/** The same for an email: "2026-11-20 08:18 UTC (+00:00)". */
+export function utcStamp(at: string | number): string {
+  const iso = new Date(at).toISOString();
+  return `${iso.slice(0, 10)} ${iso.slice(11, 16)} UTC (+00:00)`;
+}
+
+export function autoResolveDays(env: Pick<SupportEnv, "SUPPORT_AUTO_RESOLVE_DAYS">): number {
+  const n = Number(env.SUPPORT_AUTO_RESOLVE_DAYS);
+  return Number.isFinite(n) && n > 0 ? n : AUTO_RESOLVE_DAYS;
+}
 
 const dir = (env: SupportEnv) => env.DIRECTORY.getByName("directory") as unknown as DirectoryApi;
 const hubOf = (env: SupportEnv, slug: string) => env.WORKSPACE.getByName(slug) as unknown as HubApi;
@@ -209,10 +235,19 @@ export type CaseUpdate = {
   fix?: { summary?: string; version?: string; commit?: string; pr?: string };
   duplicateOf?: number | null;
   errorId?: string | null;
+  /** The approved plan for working it (text or Markdown), shown on the request's page; null removes it. */
+  plan?: string | null;
+  /** A line for the request's log, shown on its page. */
+  event?: string;
+  /** Who is making the change, for the log: "agent" (the default), "system", or the person's address. */
+  actor?: string;
 };
 
-/** Moves a request along. The person sees status changes on the page; some (TELL) they're also told about. */
-export async function updateCase(env: SupportEnv, u: CaseUpdate): Promise<SupportCase> {
+/**
+ * Moves a request along. The person sees status changes on the page; some (TELL) they're also told about, in one
+ * email that carries the message too. `hub` is the support workspace when the caller is that workspace itself.
+ */
+export async function updateCase(env: SupportEnv, u: CaseUpdate, hub: HubApi = hubOf(env, SUPPORT_SLUG)): Promise<SupportCase> {
   const d = dir(env);
   const before = await d.supportCase(u.n);
   if (!before || !before.artifactId) throw new SupportError(`no request #${u.n}`);
@@ -224,49 +259,210 @@ export async function updateCase(env: SupportEnv, u: CaseUpdate): Promise<Suppor
   // Marking a duplicate makes it one, unless a status is given or it's already closed.
   const closed = ["resolved", "wont_fix"].includes(before.status);
   const status: CaseStatus = u.status ?? (u.duplicateOf && !closed ? "duplicate" : (before.status as CaseStatus));
-  const hub = hubOf(env, SUPPORT_SLUG);
-  const state = (await hub.state(before.artifactId))["case/status"] as { status?: string; at?: string; thread?: string; history?: { status: string; at: string }[] } | undefined;
+  const plan = u.plan === undefined ? undefined : u.plan?.trim() || null;
+  if (plan && plan.length > PLAN_MAX) throw new SupportError(`the plan is limited to ${PLAN_MAX} characters; keep the detail in the notes artifact`);
+  const actor = u.actor ?? "agent";
+  const page = await hub.state(before.artifactId);
+  const state = page["case/status"] as { status?: string; at?: string; thread?: string; history?: { status: string; at: string }[] } | undefined;
+  const answer = `approve/fixed/${before.reporter}`;
   const now = new Date().toISOString();
-  // Against what the page shows, so a retry after a failure partway still records the change and tells the person.
-  const changed = (state?.status ?? before.status) !== status;
+  // Against the record and what the page shows, so a retry after a failure partway (the page written, the record
+  // not) still logs the change and tells the person.
+  const shown = (state?.status ?? before.status) !== status;
+  const changed = before.status !== status || shown;
   const fix = u.fix ? { ...(before.fix ?? {}), ...u.fix } : before.fix;
-  const history = changed ? [...(state?.history ?? []), { status, at: now }] : (state?.history ?? []);
+  const history = shown ? [...(state?.history ?? []), { status, at: now }] : (state?.history ?? []);
   // The page first, the record after: what the person sees is never behind what the record says.
   await hub.setState(
     before.artifactId,
     {
       "case/status": {
         status,
-        at: changed ? now : (state?.at ?? now),
+        at: shown ? now : (state?.at ?? now),
         thread: state?.thread ?? null,
         history,
         // What the person sees: no commit or PR, just what changed and in which version.
         ...(fix?.summary || fix?.version ? { fix: { summary: String(fix.summary ?? ""), version: String(fix.version ?? "") } } : {}),
       } as JsonValue,
+      // A fix released again asks again: what they said about the last one no longer stands.
+      ...(changed && status === "fix_deployed" && page[answer] !== undefined ? { [answer]: null } : {}),
     },
     null,
   );
-  if (u.message?.trim()) {
-    await hub.addComment(before.artifactId, "agent", { thread: state?.thread, text: u.message.trim().slice(0, DETAILS_MAX) }, supportOrigin(env));
-  }
-  const after = (await d.updateCase(u.n, {
-    status,
-    ...(u.duplicateOf !== undefined ? { duplicateOf: u.duplicateOf } : {}),
-    ...(u.fix ? { fix: fix as Record<string, unknown> } : {}),
-    ...(u.errorId !== undefined ? { errorGroup: u.errorId } : {}),
-  }))!;
-  const tell = changed ? TELL[status] : undefined;
+  // The person hears of a change they didn't make themselves.
+  const tell = changed && actor !== before.reporter ? TELL[status] : undefined;
+  const message = u.message?.trim().slice(0, DETAILS_MAX);
+  let emailed = false;
   if (tell) {
     const url = caseUrl(env, before);
     // Once per change (the same status later, after something else, is a new change).
     const fresh = await d.addInbox(before.reporter, { kind: "support", title: `${tell} (#${u.n})`, body: before.title, url, dedupe: `case:${u.n}:${status}:${history.length}`, slug: SUPPORT_SLUG, artifact: before.artifactId });
     if (fresh) {
-      await sendSupportUpdate(env, before.reporter, { subject: `${tell}: ${before.title}`, lines: [`Your request #${u.n}: ${tell.toLowerCase()}.`], url }).catch((err) =>
-        console.error("support email failed", err),
+      const lines = [
+        `Your request #${u.n}: ${tell.toLowerCase()}${/[?.!]$/.test(tell) ? "" : "."}`,
+        ...(message ? [message] : []),
+        ...(status === "fix_deployed"
+          ? [`If we don't hear from you by ${utcStamp(Date.parse(now) + autoResolveDays(env) * 86_400_000)}, we'll mark it resolved. You can still reply after that and we'll pick it up again.`]
+          : []),
+        `Updated ${utcStamp(now)}.`,
+      ];
+      emailed = await sendSupportUpdate(env, before.reporter, { subject: `${tell}: ${before.title}`, lines, url }).then(
+        () => true,
+        (err) => (console.error("support email failed", err), false),
       );
     }
   }
+  if (message) {
+    // The status email carried the message, so the comment's own notification to them is left out; if that email
+    // didn't go, the comment notifies as usual.
+    await hub.addComment(before.artifactId, "agent", { thread: state?.thread, text: message, ...(emailed ? { onBehalf: before.reporter } : {}) }, supportOrigin(env));
+  }
+  const planChanged = plan !== undefined && plan !== before.plan;
+  const said = u.event?.trim().replace(/\s+/g, " ").slice(0, EVENT_MAX);
+  const added: CaseEvent[] = [
+    ...(said ? [{ at: now, actor, event: said }] : []),
+    ...(changed ? [{ at: now, actor, event: `Status: ${status}`, status }] : []),
+    ...(planChanged ? [{ at: now, actor, event: plan === null ? "Plan removed" : before.plan ? "Plan changed" : "Plan set" }] : []),
+  ];
+  const after = (await d.updateCase(u.n, {
+    status,
+    ...(u.duplicateOf !== undefined ? { duplicateOf: u.duplicateOf } : {}),
+    ...(u.fix ? { fix: fix as Record<string, unknown> } : {}),
+    ...(u.errorId !== undefined ? { errorGroup: u.errorId } : {}),
+    ...(planChanged ? { plan } : {}),
+    ...(added.length ? { addEvents: added } : {}),
+  }))!;
+  if (added.length || planChanged) {
+    await hub.setState(before.artifactId, { ...(planChanged ? { "case/plan": plan ? { text: plan, at: now } : null } : {}), ...(added.length ? { "case/log": after.events as unknown as JsonValue } : {}) }, null);
+  }
+  await armFixChecks(env, hub).catch((err) => console.error("scheduling the fix check failed", err));
   return after;
+}
+
+// ---- did the fix work? -----------------------------------------------------------------
+
+/** Wakes the support workspace when the oldest unanswered fix is due to resolve; nothing is scheduled while none waits. */
+async function armFixChecks(env: SupportEnv, hub: HubApi, notBefore = 0): Promise<void> {
+  const waiting = await dir(env).supportCases({ status: "fix_deployed", limit: 200 });
+  const due = waiting.map((c) => Date.parse(c.statusAt) + autoResolveDays(env) * 86_400_000);
+  await hub.setFixCheckAt(due.length ? Math.max(Math.min(...due), notBefore) : null);
+}
+
+/**
+ * The person answered "Did this fix it?" on their request's page (the support workspace calls this). Yes resolves
+ * it. No comes with a note saying what's still wrong: the request reopens and the operators are told.
+ */
+export async function fixAnswered(env: SupportEnv, hub: HubApi, artifactId: string, by: string, value: unknown): Promise<void> {
+  const d = dir(env);
+  const c = await d.supportCaseByArtifact(artifactId);
+  if (!c || c.reporter !== by.toLowerCase() || !value || typeof value !== "object") return;
+  const v = value as { decision?: unknown; note?: unknown };
+  if (v.decision === "approve") {
+    if (c.status === "fix_deployed") await updateCase(env, { n: c.n, status: "resolved", actor: c.reporter, event: "Confirmed the fix works" }, hub);
+    return;
+  }
+  if (v.decision !== "changes" || !["fix_deployed", "resolved"].includes(c.status)) return;
+  const note = String(v.note ?? "").trim();
+  const after = await updateCase(env, { n: c.n, status: "investigating", actor: c.reporter, event: `Still a problem: ${note}` }, hub);
+  const url = caseUrl(env, c);
+  try {
+    for (const op of operators(env)) {
+      await d.addInbox(op, { kind: "support", title: `Reopened: the fix didn't work (#${c.n})`, body: note, url, dedupe: `case:${c.n}:reopened:${after.statusAt}`, slug: SUPPORT_SLUG, artifact: c.artifactId });
+    }
+    await sendOperatorNote(env, `Request #${c.n} reopened: the fix didn't work`, [`${c.reporter} says request #${c.n} (${c.title}) is still a problem:`, note, `Answered ${utcStamp(after.statusAt)}.`], {
+      href: url,
+      label: "Open the request",
+    });
+    await ops(env, { kind: "support_reopened", slug: SUPPORT_SLUG, message: `#${c.n} reopened by ${c.reporter}: the fix didn't work`, detail: { case: c.n, artifactId: c.artifactId } });
+  } catch (err) {
+    console.error("telling the operators about a reopened request failed", c.n, err);
+  }
+}
+
+/**
+ * Resolves requests whose released fix nobody answered about in SUPPORT_AUTO_RESOLVE_DAYS, telling the person
+ * how to reopen. Run by the support workspace's alarm, which then waits for the next one due.
+ */
+export async function resolveUnanswered(env: SupportEnv, hub: HubApi = hubOf(env, SUPPORT_SLUG), now = Date.now()): Promise<number[]> {
+  const days = autoResolveDays(env);
+  const resolved: number[] = [];
+  for (const c of await dir(env).supportCases({ status: "fix_deployed", limit: 200 })) {
+    if (!c.artifactId || Date.parse(c.statusAt) + days * 86_400_000 > now) continue;
+    try {
+      // They did answer, and acting on it failed at the time: act on it now rather than call it unanswered.
+      const said = (await hub.state(c.artifactId))[`approve/fixed/${c.reporter}`];
+      if (said) {
+        await fixAnswered(env, hub, c.artifactId, c.reporter, said);
+        continue;
+      }
+      await updateCase(
+        env,
+        {
+          n: c.n,
+          status: "resolved",
+          actor: "system",
+          event: `No answer in ${days} ${days === 1 ? "day" : "days"}: resolved automatically`,
+          message: `We haven't heard back in ${days} ${days === 1 ? "day" : "days"}, so we've marked this resolved. If it's still a problem, say so here or with "No, still a problem" on this page, and we'll pick it up again.`,
+        },
+        hub,
+      );
+      resolved.push(c.n);
+    } catch (err) {
+      console.error("resolving an unanswered request failed", c.n, err);
+    }
+  }
+  // One that keeps failing is tried again in an hour, not every second.
+  await armFixChecks(env, hub, Date.now() + 3_600_000).catch(() => hub.setFixCheckAt(Date.now() + 3_600_000));
+  return resolved;
+}
+
+// ---- pages the person linked ---------------------------------------------------------------
+
+export type LinkedPage = { url: string; slug: string; id: string };
+
+/** This deployment's artifact pages named in `text`. */
+function pageLinks(env: SupportEnv, text: string): LinkedPage[] {
+  const suffix = env.WORKSPACE_SUFFIX.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const out: LinkedPage[] = [];
+  for (const m of text.matchAll(new RegExp(`https://([a-z0-9-]+)${suffix}/a/(a[a-z0-9]{12})(?![a-z0-9])`, "g"))) {
+    if (!out.some((l) => l.slug === m[1] && l.id === m[2])) out.push({ url: `https://${m[1]}${env.WORKSPACE_SUFFIX}/a/${m[2]}`, slug: m[1], id: m[2] });
+  }
+  return out;
+}
+
+/** The artifacts the person who sent a request linked in it or in its conversation (their own words only). */
+export async function linkedPages(env: SupportEnv, c: SupportCase, hub: HubApi = hubOf(env, SUPPORT_SLUG)): Promise<LinkedPage[]> {
+  if (!c.artifactId) return [];
+  const threads = (await hub.threads(c.artifactId)) as { comments: { by: string; text: string }[] }[];
+  const theirs = threads.flatMap((t) => t.comments).filter((x) => x.by === c.reporter);
+  return pageLinks(env, theirs.map((x) => x.text).join("\n")).slice(0, LINKS_MAX);
+}
+
+/**
+ * Reads an artifact the person linked, for the operator's assistant: only a page they named themselves, and only
+ * while they can open it (their access is checked now, not when they linked it). Nothing is copied or kept; the
+ * first read of each page goes in the request's log, which they see.
+ */
+export async function readLinkedPage(env: SupportEnv, n: number, url: string): Promise<LinkedPage & { title: string; version: number; files: Record<string, string> }> {
+  const d = dir(env);
+  const c = await d.supportCase(n);
+  if (!c || !c.artifactId) throw new SupportError(`no request #${n}`);
+  const [want] = pageLinks(env, url);
+  const link = want && (await linkedPages(env, c)).find((l) => l.slug === want.slug && l.id === want.id);
+  if (!link) throw new SupportError(`that page isn't linked in request #${n} by the person who sent it`);
+  const gone = new SupportError("the person who sent the request can't open that page, so it can't be read for them");
+  if (!(await d.workspace(link.slug))) throw gone;
+  const target = hubOf(env, link.slug);
+  if (!(await target.roleFor(link.id, c.reporter))) throw gone;
+  const meta = await target.meta(link.id);
+  if (!meta) throw gone;
+  const files = await target.files(link.id);
+  const event = `Read the linked page ${link.slug}/a/${link.id}`;
+  if (!c.events.some((e) => e.event === event)) {
+    const after = await d.updateCase(n, { addEvents: [{ at: new Date().toISOString(), actor: "agent", event }] });
+    if (after) await hubOf(env, SUPPORT_SLUG).setState(c.artifactId, { "case/log": after.events as unknown as JsonValue }, null);
+  }
+  return { ...link, title: meta.title, version: meta.version, files };
 }
 
 /**

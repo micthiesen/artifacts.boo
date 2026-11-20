@@ -949,7 +949,7 @@ ${s.problem ? `<p class="notice error" role="alert" id="support-error">${escapeH
 <label class="field"><span>Details</span><textarea class="input" name="details"${desc} required rows="6" maxlength="5000" placeholder="What happened, and what you expected (or what you'd like)">${escapeHtml(s.details ?? "")}</textarea></label>
 ${s.page ? `<label class="check"><input type="checkbox" name="page" value="${escapeHtml(s.page)}" checked> <span>Include the page I came from (${escapeHtml(s.page)}) and my browser</span></label>` : `<label class="check"><input type="checkbox" name="browser" value="1" checked> <span>Include my browser</span></label>`}
 ${s.error ? `<input type="hidden" name="error" value="${escapeHtml(s.error)}"><p class="muted small">The error code ${escapeHtml(s.error)} goes with it.</p>` : ""}
-<p class="muted small">We never include what's in your artifacts. Replies come to the request's own page, and we'll let you know.</p>
+<p class="muted small">We never include what's in your artifacts. If you link an artifact you can open, we can read it to help. Replies come to the request's own page, and we'll let you know.</p>
 <button class="button" type="submit">Send</button>
 </form></section>`
     : `<section class="card-section"><h2>Tell us</h2><p class="muted"><a href="/login?return=/support">Sign in</a> to send a request and follow it here, or email ${mail}.</p></section>`;

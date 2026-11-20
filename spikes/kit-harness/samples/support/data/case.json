@@ -1,0 +1,10 @@
+{
+  "number": 7,
+  "kind": "bug",
+  "title": "Table is blank on my phone",
+  "reporter": "ada.lovelace@example.com",
+  "submittedAt": "2026-11-18T17:05:00.000Z",
+  "viaAgent": false,
+  "context": { "workspace": "acme", "page": "acme.artifacts.boo/a/<id>", "browser": "Safari on iOS", "version": "c5a3fbaf01c5" },
+  "error": null
+}

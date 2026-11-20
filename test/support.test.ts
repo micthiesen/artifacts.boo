@@ -263,3 +263,144 @@ test("notifications land in the inbox even with no channels, and stay unread unt
   expect(await unread(APEX, apex)).toBe(1);
   expect(await unread(APEX, apex, { read: "all" })).toBe(0);
 });
+
+/** The support workspace, after everything a write started in the background has finished. */
+async function settled() {
+  const support = hubs.get("support") as InstanceType<typeof Workspace>;
+  await Promise.all((support as unknown as { ctx: { waited: Promise<unknown>[] } }).ctx.waited);
+  return support;
+}
+
+test("a status change with a reply sends the person one email, carrying both, with its time's UTC offset", async () => {
+  await report();
+  const support = hubs.get("support") as InstanceType<typeof Workspace>;
+  const bodies: { to: string; subject: string; text?: string }[] = [];
+  (env.EMAIL as { send: unknown }).send = async (m: { to: string; subject: string; text: string }) => void bodies.push(m);
+  await call("support", OP, "support_update", { case: 1, status: "needs_info", message: "Which phone and browser?" });
+  // The comment's own notification, due later, would have been the second email.
+  await support.deliverDue(Date.now() + 3_600_000);
+  const toAna = bodies.filter((m) => m.to === ANA);
+  const notified = () => h.directory.inbox(ANA).items.filter((i) => i.kind === "notification").length;
+  expect(toAna).toHaveLength(1);
+  expect(notified()).toBe(0);
+  expect(toAna[0].text).toContain("Which phone and browser?");
+  expect(toAna[0].text).toMatch(/Updated \d{4}-\d\d-\d\d \d\d:\d\d UTC \(\+00:00\)\./);
+  // A reply with no status email still notifies them the usual way.
+  await call("support", OP, "support_update", { case: 1, message: "Thanks, looking." });
+  await support.deliverDue(Date.now() + 7_200_000);
+  expect(notified()).toBe(1);
+});
+
+test("the plan and the log are kept on the request and shown on its page; tool times carry their offset", async () => {
+  await report();
+  const support = hubs.get("support") as InstanceType<typeof Workspace>;
+  const c = h.directory.supportCase(1)!;
+  const r = await call("support", OP, "support_update", { case: 1, status: "investigating", plan: "1. Reproduce on a phone\n2. Render tables as cards", event: "Operator approved the plan" });
+  expect(r.error).toBe(false);
+  expect(r.text).toMatch(/updated \d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\+00:00/);
+  expect(h.directory.supportCase(1)!.plan).toContain("Render tables as cards");
+  expect(h.directory.supportCase(1)!.events.map((e) => [e.actor, e.event])).toEqual([
+    ["agent", "Operator approved the plan"],
+    ["agent", "Status: investigating"],
+    ["agent", "Plan set"],
+  ]);
+  expect((support.state(c.artifactId)["case/plan"] as { text: string }).text).toContain("Reproduce on a phone");
+  expect(support.state(c.artifactId)["case/log"]).toHaveLength(3);
+  const read = await call("support", OP, "support_case", { case: 1 });
+  expect(read.text).toContain("Reproduce on a phone");
+  expect(read.text).toMatch(/\+00:00 "agent": "Plan set"/);
+  // Nobody writes them from the page, and null takes the plan away.
+  expect(() => support.setState(c.artifactId, { "case/plan": { text: "mine" } }, ANA, undefined, { role: "edit" })).toThrow("support tools");
+  await call("support", OP, "support_update", { case: 1, plan: null });
+  expect(h.directory.supportCase(1)!.plan).toBeNull();
+  expect(support.state(c.artifactId)["case/plan"]).toBeUndefined();
+  expect((await call("support", OP, "support_update", { case: 1, plan: "x".repeat(10_001) })).text).toContain("limited to 10000");
+});
+
+test("\"fixed\" resolves the request; \"still a problem\" needs a note, reopens it and tells the operator", async () => {
+  await report();
+  const support = hubs.get("support") as InstanceType<typeof Workspace>;
+  const c = h.directory.supportCase(1)!;
+  const key = `approve/fixed/${ANA}`;
+  const answer = (value: Record<string, unknown>) => support.setState(c.artifactId, { [key]: value }, ANA, undefined, { role: "edit" });
+  await call("support", OP, "support_update", { case: 1, status: "fix_deployed", fix: { summary: "Tables show as cards on phones." } });
+  expect(() => answer({ decision: "changes" })).toThrow("what's still wrong");
+  expect(() => answer({ decision: "changes", note: "  " })).toThrow("what's still wrong");
+  mail = [];
+  answer({ decision: "changes", note: "Still blank on my iPhone." });
+  await settled();
+  expect(support.state(c.artifactId)[key]).toMatchObject({ decision: "changes", note: "Still blank on my iPhone.", by: ANA });
+  expect(h.directory.supportCase(1)).toMatchObject({ status: "investigating" });
+  expect((support.state(c.artifactId)["case/status"] as { status: string }).status).toBe("investigating");
+  expect(h.directory.supportCase(1)!.events.slice(-2)).toMatchObject([
+    { actor: ANA, event: "Still a problem: Still blank on my iPhone." },
+    { actor: ANA, event: "Status: investigating" },
+  ]);
+  expect(h.directory.inbox(OP).items[0]).toMatchObject({ kind: "support", body: "Still blank on my iPhone.", url: `https://support.artifacts.test/a/${c.artifactId}` });
+  expect(mail.filter((m) => m.to === OP && m.subject.includes("reopened"))).toHaveLength(1);
+  // Their own answer isn't news to them.
+  expect(mail.filter((m) => m.to === ANA)).toHaveLength(0);
+  // A second fix asks again, and this time it worked.
+  await call("support", OP, "support_update", { case: 1, status: "fix_deployed" });
+  expect(support.state(c.artifactId)[key]).toBeUndefined();
+  mail = [];
+  answer({ decision: "approve" });
+  await settled();
+  expect(h.directory.supportCase(1)).toMatchObject({ status: "resolved" });
+  expect(h.directory.supportCase(1)!.events.at(-2)).toMatchObject({ actor: ANA, event: "Confirmed the fix works" });
+  expect(mail.filter((m) => m.to === ANA)).toHaveLength(0);
+  // Resolved, and it comes back: saying so reopens it, which counts.
+  answer({ decision: "changes", note: "It's back." });
+  await settled();
+  expect(h.directory.supportCase(1)).toMatchObject({ status: "investigating", reopened: 1 });
+});
+
+test("a released fix nobody answers about resolves after a week (or the days set), and says how to reopen", async () => {
+  const { resolveUnanswered } = await import("../src/worker/support.ts");
+  await report();
+  await call("support", OP, "support_update", { case: 1, status: "fix_deployed" });
+  const support = hubs.get("support") as InstanceType<typeof Workspace>;
+  const c = h.directory.supportCase(1)!;
+  const day = 86_400_000;
+  // The workspace wakes for it when it's due, not before.
+  expect(await (support as unknown as { ctx: DurableObjectState }).ctx.storage.getAlarm()).toBeGreaterThan(Date.now() + 6 * day);
+  expect(await resolveUnanswered(env as never, support as never, Date.now() + 6 * day)).toEqual([]);
+  expect(h.directory.supportCase(1)!.status).toBe("fix_deployed");
+  mail = [];
+  expect(await resolveUnanswered(env as never, support as never, Date.now() + 8 * day)).toEqual([1]);
+  expect(h.directory.supportCase(1)!.status).toBe("resolved");
+  expect(h.directory.supportCase(1)!.events.at(-2)).toMatchObject({ actor: "system", event: "No answer in 7 days: resolved automatically" });
+  expect(support.threads(c.artifactId)[0].comments.at(-1)!.text).toContain("still a problem");
+  expect(mail.filter((m) => m.to === ANA)).toHaveLength(1);
+  // The number of days is the operator's to set.
+  await call("support", OP, "support_update", { case: 1, status: "fix_deployed" });
+  env.SUPPORT_AUTO_RESOLVE_DAYS = "2";
+  expect(await resolveUnanswered(env as never, support as never, Date.now() + 3 * day)).toEqual([1]);
+});
+
+test("the assistant can read an artifact the person linked, in their own workspace, only while they can open it", async () => {
+  const made = await h.hub.create({ title: "Tracker", files: { "index.mdx": "# Tracker\n", "data/board.json": '{"cards":["one"]}' }, owner: ADMIN });
+  const secret = await h.hub.create({ title: "Payroll", files: { "index.mdx": "# Payroll\n" }, owner: ADMIN });
+  if (!made.ok || !secret.ok) throw new Error("create");
+  h.hub.share(made.id, { add: [{ email: ANA, role: "view" }] });
+  const link = `https://acme.artifacts.test/a/${made.id}`;
+  const other = `https://acme.artifacts.test/a/${secret.id}`;
+  await call("acme", ANA, "support_report", { kind: "bug", title: "Board is blank", details: `See ${link} and ${other}.` });
+  expect((await call("support", OP, "support_case", { case: 1 })).data.linked.map((l: { url: string }) => l.url)).toEqual([link, other]);
+  const listed = await call("support", OP, "support_page", { case: 1, url: link });
+  expect(listed.error).toBe(false);
+  expect(listed.text).toContain("data/board.json");
+  const source = await call("support", OP, "support_page", { case: 1, url: `${link}#top`, path: "data/board.json" });
+  expect(source.text).toContain('{"cards":["one"]}');
+  // Read once, logged once, where the person sees it.
+  expect(h.directory.supportCase(1)!.events.filter((e) => e.event === `Read the linked page acme/a/${made.id}`)).toHaveLength(1);
+  // Linking a page they can't open opens nothing; nor does a page they never linked, or losing access later.
+  expect((await call("support", OP, "support_page", { case: 1, url: other })).text).toContain("can't open that page");
+  const third = await h.hub.create({ title: "Plan", files: { "index.mdx": "# Plan\n" }, owner: ANA });
+  if (!third.ok) throw new Error("create");
+  expect((await call("support", OP, "support_page", { case: 1, url: `https://acme.artifacts.test/a/${third.id}` })).text).toContain("isn't linked");
+  h.hub.share(made.id, { remove: [ANA] });
+  expect((await call("support", OP, "support_page", { case: 1, url: link })).text).toContain("can't open that page");
+  // Only the operator, on the support workspace.
+  expect(await tools("acme", ANA)).not.toContain("support_page");
+});

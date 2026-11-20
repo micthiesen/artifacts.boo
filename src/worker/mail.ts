@@ -100,7 +100,8 @@ async function deliver(env: MailEnv, to: string, m: Message) {
 /** A short message: paragraphs and one button, with the footer saying why it was sent. */
 function simple(env: MailEnv, to: string, input: { subject: string; preheader: string; lines: string[]; link: { href: string; label: string }; footer: string }) {
   const text = [...input.lines, `${input.link.label}: ${input.link.href}`, `--\n${input.footer}\n${PRODUCT}`].join("\n\n") + "\n";
-  const body = input.lines.map((l) => para(escape(l))).join("\n") + button(input.link.href, input.link.label);
+  // pre-line: a line may be someone's message, with line breaks of its own.
+  const body = input.lines.map((l) => para(escape(l), "white-space:pre-line")).join("\n") + button(input.link.href, input.link.label);
   const html = layout({ apex: apexOf(env), title: input.subject, preheader: input.preheader, body, footer: escape(input.footer) });
   return deliver(env, to, { subject: input.subject, text, html });
 }
@@ -176,7 +177,7 @@ export async function sendOperatorNote(env: MailEnv & { OPERATOR_EMAILS?: string
   }
 }
 
-/** About someone's support request: received, or its status changed. */
+/** About someone's support request: received, or its status changed (with the reply that came with the change). */
 export function sendSupportUpdate(env: MailEnv, to: string, input: { subject: string; lines: string[]; url: string }) {
   return simple(env, to, {
     subject: input.subject,
