@@ -110,6 +110,22 @@ const stamped = await ed.next((m) => m.t === "set" && m.key === `approve/go/${ed
 check("a decision is stamped with the editor and a time", stamped?.value?.by === editor && typeof stamped?.value?.at === "number" && stamped?.value?.note === "Cheaper plan first", stamped);
 ed.send({ t: "set", cid: "a2", key: `approve/go/${viewer}`, value: { decision: "approve" } });
 check("nobody can decide for someone else", Boolean(await ed.next((m) => m.t === "rejected" && m.cid === "a2")));
+// ---- reactions in a Comments block: shared state, so edit access only -----------------
+ed.send({ t: "set", cid: "k1", key: "comments/main/0001-e2e", value: { text: "From the page's own comments" } });
+check("an editor comments in the Comments block", Boolean(await ed.next((m) => m.t === "set" && m.cid === "k1")));
+ed.send({ t: "set", cid: "k2", key: `react/main/0001-e2e/${editor}`, value: ["✅", "👍"] });
+const blockReact = await v.next((m) => m.t === "set" && m.key === `react/main/0001-e2e/${editor}`);
+check("an editor's reaction there reaches a viewer, in the set's order", JSON.stringify(blockReact?.value) === JSON.stringify(["👍", "✅"]), blockReact);
+v.send({ t: "set", cid: "k3", key: `react/main/0001-e2e/${viewer}`, value: ["👍"] });
+check("view access can't react in a Comments block", Boolean(await v.next((m) => m.t === "rejected" && m.cid === "k3")));
+ed.send({ t: "set", cid: "k4", key: `react/main/0001-e2e/${viewer}`, value: ["👍"] });
+check("nobody reacts as someone else", Boolean(await ed.next((m) => m.t === "rejected" && m.cid === "k4")));
+const blockState = await call("artifact_state", { id, prefix: "react/main/" });
+check("artifact_state shows the reaction to an agent", JSON.stringify(blockState.structuredContent ?? blockState.content).includes(`react/main/0001-e2e/${editor}`), blockState.content);
+const agentReacts = await call("artifact_state", { id, set: { [`react/main/0001-e2e/${owner}`]: ["👍"] } });
+check("an agent can't react", agentReacts.isError === true && /made by people/.test(agentReacts.content[0].text), agentReacts.content);
+const blockActivity = await call("artifact_activity", { id, limit: 5 });
+check("activity words the block reaction", /reacted \["👍","✅"\] to a comment in <Comments id="main">/.test(blockActivity.content[0].text), blockActivity.content[0].text);
 ed.ws.close();
 const decided = await call("artifact_activity", { id, limit: 5 });
 const polled = await modern("events/poll", { name: "artifact.answered", arguments: { artifact: id }, cursor: start.body.result?.cursor });

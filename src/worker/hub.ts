@@ -1478,6 +1478,7 @@ export class Workspace extends DurableObject {
     if (Object.values(changes).some((v) => v !== null)) this.withinPlanForState(changes);
     let seq = 0;
     const applied: { key: string; value: JsonValue | null; seq: number; created: boolean }[] = [];
+    const swept: { key: string; seq: number }[] = [];
     this.ctx.storage.transactionSync(() => {
       for (const [key, raw] of Object.entries(changes)) {
         if (key.length === 0 || key.length > 200) throw new HubError(`state key "${key.slice(0, 40)}" must be 1-200 chars`);
@@ -1495,6 +1496,12 @@ export class Workspace extends DurableObject {
         }
         // Ledger entries say who added them, so agents can't add or change one; they may remove one (after folding it into a data file).
         if (opts.agent && key.startsWith("ledger/") && raw !== null) throw new HubError("ledger entries are added by people on the page; keep your own rows in the Ledger's data file");
+        // A reaction to a comment in a <Comments> block is a person's own; an agent may only clear one away.
+        const reactsTo = REACTION_KEY.exec(key)?.[1];
+        if (reactsTo && opts.agent && raw !== null) throw new HubError("reactions are made by people on the page");
+        if (reactsTo && by && raw !== null && !this.sql.exec(`SELECT 1 FROM state WHERE artifact_id = ? AND key = ?`, id, `comments/${reactsTo}`).toArray().length) {
+          throw new HubError("that comment was deleted");
+        }
         // A <Decision> is answered by a person on the page; the agent asks the question and reads the answer.
         if (opts.agent && key.startsWith("decide/")) throw new HubError("decisions are made by people on the page");
         // Who may answer a <Decision> is written in the page's source, so read it there rather than trust the writer.
@@ -1517,12 +1524,24 @@ export class Workspace extends DurableObject {
           );
         }
         applied.push({ key, value, seq, created: !existing && value !== null });
+        // A deleted comment takes the reactions to it along. They go to viewers but not into the activity log.
+        if (value === null && key.startsWith("comments/")) {
+          const under = `react/${key.slice("comments/".length)}/`;
+          for (const r of this.sql.exec(`SELECT key FROM state WHERE artifact_id = ? AND substr(key, 1, ?) = ?`, id, under.length, under).toArray()) {
+            if (!REACTION_KEY.test(r.key as string)) continue;
+            const at = this.sql.exec(`UPDATE artifacts SET state_seq = state_seq + 1 WHERE id = ? RETURNING state_seq`, id).one().state_seq as number;
+            this.sql.exec(`DELETE FROM state WHERE artifact_id = ? AND key = ?`, id, r.key);
+            swept.push({ key: r.key as string, seq: at });
+            seq = at;
+          }
+        }
       }
       const total = this.sql.exec(`SELECT COALESCE(SUM(length(value)), 0) AS n FROM state WHERE artifact_id = ?`, id).one().n as number;
       if (total > SHARED_STATE_MAX_BYTES) throw new HubError(`shared state for this artifact would exceed 4 MB`);
       for (const a of applied) this.logStateEvent(id, by ?? "agent", a.key, a.value, a.created);
     });
     for (const a of applied) this.broadcast(id, { t: "set", key: a.key, value: a.value, seq: a.seq, by, cid });
+    for (const s of swept) this.broadcast(id, { t: "set", key: s.key, value: null, seq: s.seq, by });
     // A new comment in a <Comments> block notifies like a thread comment.
     for (const a of applied) {
       const scope = /^comments\/([^/]+)\//.exec(a.key)?.[1];
@@ -4012,6 +4031,12 @@ function balanced(text: string, open: number): string {
   return text.slice(open);
 }
 
+/**
+ * A person's reactions to a comment in a <Comments> block: react/<block id>/<comment key>/<their email>. Only a
+ * key ending in an address counts, so a page's own keys that happen to start with react/ are left alone.
+ */
+const REACTION_KEY = /^react\/(.+)\/([^/]+@[^/]+)$/;
+
 function stampCollab(
   key: string,
   value: JsonValue | null,
@@ -4089,6 +4114,15 @@ function stampCollab(
     // The first author and time stay; an edit adds who changed it and when.
     if (!exists) return { values, by, at: Date.now() };
     return { values, by: existingBy ?? by, at: existingAt ?? Date.now(), editedBy: by, editedAt: Date.now() };
+  }
+  // One key per person and comment, so two people never write the same one: the emoji they gave it, from the fixed set.
+  const reaction = REACTION_KEY.exec(key);
+  if (reaction) {
+    if (reaction[2] !== by) throw new HubError("you can only change your own reactions");
+    if (value === null) return null;
+    if (!Array.isArray(value) || value.some((e) => typeof e !== "string" || !Object.hasOwn(REACTIONS, e))) throw new HubError(`reactions are a list of ${Object.keys(REACTIONS).join(" ")}`);
+    const given = Object.keys(REACTIONS).filter((e) => value.includes(e));
+    return given.length ? given : null;
   }
   if (key.startsWith("comments/")) {
     if (exists && existingBy !== null && existingBy !== by && role !== "owner") {

@@ -7,7 +7,7 @@ await setup();
 const guest = `guest-${slug}@example.com`;
 const long = "A deliberately long title that keeps going to see whether it wraps on a phone screen";
 const files = {
-  "index.mdx": `import Box from "./box";\n\n# ${long}\n\n<Summary>Wide things below.</Summary>\n\n<Approval id="go" title="${long}" approvers={["${guest}"]} />\n\n<Form id="f" fields={[{ name: "team", label: "Team", type: "select", options: ["${long}"] }]} />\n\n<Box />\n`,
+  "index.mdx": `import Box from "./box";\n\n# ${long}\n\n<Summary>Wide things below.</Summary>\n\n<Approval id="go" title="${long}" approvers={["${guest}"]} />\n\n<Form id="f" fields={[{ name: "team", label: "Team", type: "select", options: ["${long}"] }]} />\n\n<Box />\n\n<Comments />\n`,
   // A scene whose title, description and label are all too long for a phone.
   "box.tsx": `import * as THREE from "three";\nimport { Scene } from "@a/ui";\nexport default () => <Scene title="${long}" description="${long}" build={({ scene, solid, label }) => { const box = solid(new THREE.BoxGeometry(3, 1, 1)); scene.add(box); label("${long}", box); }} />;\n`,
 };
@@ -34,6 +34,11 @@ const emoji = ["👍", "❤️", "🎉", "😄", "👀", "✅"];
 for (const [i, e] of emoji.entries()) ws.send(JSON.stringify({ t: "react", cid: `x${i}`, comment: thread?.comments[0].id, emoji: e, on: true }));
 const reacted = (await wait("x5"))?.thread;
 check("a comment with all six reactions", reacted?.comments[0].reactions?.length === 6, reacted ?? got.slice(-3));
+// And a comment in the page's own Comments block with all six, which the guest (edit access) sees with its React button.
+ws.send(JSON.stringify({ t: "set", cid: "k1", key: "comments/main/0001-layout", value: { text: long } }));
+await wait("k1");
+ws.send(JSON.stringify({ t: "set", cid: "k2", key: `react/main/0001-layout/${guest}`, value: emoji }));
+check("a Comments block comment with all six reactions", (await wait("k2"))?.value?.length === 6, got.slice(-2));
 ws.close();
 const pages: [string, string, string | undefined][] = [
   ["splash", `${apex}/`, undefined],

@@ -238,3 +238,17 @@ test("a stop Listen skips can still be a declared stop", () => {
   page(`<div data-key-scope data-box="0 0 400 200"><ul id="files" data-key-stop data-speak="skip" data-box="0 0 400 40"><li data-box="0 0 400 20">a.ts</li></ul></div>`);
   expect(walk("down")).toEqual(["files"]);
 });
+
+test("a Comments block stays out of the cursor's way with reactions on its comments: Tab reaches its buttons", () => {
+  page(`
+    <p id="intro" data-box="0 0 400 40">Intro.</p>
+    <section data-speak="skip" data-box="0 50 400 200">
+      <ul data-box="0 50 400 200">
+        <li id="c1" data-key="1" data-box="0 50 400 90"><p data-box="40 80 360 24">First.</p><div data-react="1" data-box="40 110 360 24"><button aria-pressed="true" data-box="40 110 44 24">👍1</button><button aria-pressed="false" data-box="90 110 44 24">👀2</button></div></li>
+        <li id="c2" data-key="2" data-box="0 150 400 60"><p data-box="40 180 360 24">Second.</p></li>
+      </ul>
+    </section>
+    <p id="end" data-box="0 260 400 40">The end.</p>`);
+  expect(walk("down")).toEqual(["intro", "end"]);
+  expect(walk("up")).toEqual(["intro"]);
+});

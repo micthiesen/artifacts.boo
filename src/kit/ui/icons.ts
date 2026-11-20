@@ -16,6 +16,7 @@ export { default as Pencil } from "lucide-react/dist/esm/icons/pencil.mjs";
 export { default as Plus } from "lucide-react/dist/esm/icons/plus.mjs";
 export { default as Search } from "lucide-react/dist/esm/icons/search.mjs";
 export { default as Send } from "lucide-react/dist/esm/icons/send.mjs";
+export { default as SmilePlus } from "lucide-react/dist/esm/icons/smile-plus.mjs";
 export { default as Trash2 } from "lucide-react/dist/esm/icons/trash-2.mjs";
 export { default as TriangleAlert } from "lucide-react/dist/esm/icons/triangle-alert.mjs";
 export { default as X } from "lucide-react/dist/esm/icons/x.mjs";

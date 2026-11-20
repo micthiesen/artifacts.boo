@@ -1447,6 +1447,8 @@ function describeEvent(e: { seq: number; at: string; artifact: string; title: st
       const [, part1, part2] = key.split("/");
       // The logged value is JSON text, so it is one line already.
       if (key.startsWith("comments/")) return `${head} commented in <Comments id=${quoted(part1)}>: ${e.value ?? "(deleted)"}`;
+      // A person's reactions to one comment in the block, as they stand: a list from the fixed set, so not quoted.
+      if (/^react\/.+\/[^/]+@[^/]+$/.test(key)) return `${head} ${e.value ? `reacted ${e.value}` : "took back their reaction"} to a comment in <Comments id=${quoted(part1)}>`;
       if (key.startsWith("poll/")) return `${head} voted in poll ${quoted(part1)}: ${e.value ?? "(cleared)"}`;
       if (key.startsWith("approve/")) {
         const d = summaryOf(e.value) as { decision?: string; note?: string } | null;

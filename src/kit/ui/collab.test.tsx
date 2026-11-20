@@ -189,3 +189,40 @@ test("deleting your comment asks first", async () => {
     globalThis.confirm = original;
   }
 });
+
+test("reactions in a Comments block: yours is your own key, pressed on and off; someone else's glows", async () => {
+  const c = "00000000000001-a";
+  await mount(<Comments id="m" />, { [`comments/m/${c}`]: { by: DANA, text: "Hi", at: 1 }, [`react/m/${c}/${DANA}`]: ["👀"] });
+  const chip = () => [...container.querySelectorAll<HTMLButtonElement>(`[data-react="${c}"] button`)];
+  expect(chip().map((b) => [b.textContent, b.getAttribute("aria-pressed")])).toEqual([["👀1", "false"]]);
+  expect(chip()[0].getAttribute("aria-label")).toBe("Looking: Dana. Press to add yours.");
+  expect(container.querySelector("button[aria-label='React']")).not.toBeNull();
+
+  // Adding yours writes your key only; pressing it again deletes the key.
+  await act(async () => chip()[0].click());
+  expect(sets().at(-1)).toMatchObject({ key: `react/m/${c}/${ME}`, value: ["👀"] });
+  expect(chip().map((b) => [b.textContent, b.getAttribute("aria-pressed")])).toEqual([["👀2", "true"]]);
+  expect(chip()[0].getAttribute("aria-label")).toBe("Looking: You, Dana. Press to take yours back.");
+  await act(async () => chip()[0].click());
+  expect(sets().at(-1)).toMatchObject({ key: `react/m/${c}/${ME}`, value: null });
+
+  // Chips come in the order of the set, whoever reacted first.
+  await act(async () => store.applyShared({ [`react/m/${c}/${DANA}`]: ["👀", "👍"] }, "remote"));
+  await act(frame);
+  expect(chip().map((b) => b.textContent)).toEqual(["👍1", "👀1"]);
+  expect(container.querySelector(`[data-react="${c}"]`)?.classList.contains("art-move-glow")).toBe(true);
+});
+
+test("someone with view access sees reactions but can't give one: no React button, and a chip says who", async () => {
+  const c = "00000000000001-a";
+  store.setBoot({ artifactId: "a1", version: 1, entry: "@art/index.mdx", data: {}, title: "t" } as never);
+  store.init({ viewer: { email: ME, role: "view" }, shared: { [`comments/m/${c}`]: { by: DANA, text: "Hi", at: 1 }, [`react/m/${c}/${DANA}`]: ["✅"] } as never, local: {}, presence: [], theme: "dark" });
+  await act(async () => root.render(<Comments id="m" />));
+  const chip = container.querySelector<HTMLButtonElement>(`[data-react="${c}"] button`)!;
+  expect(chip.textContent).toBe("✅1");
+  expect(chip.hasAttribute("aria-pressed")).toBe(false);
+  expect(chip.getAttribute("aria-label")).toBe("Done: Dana");
+  expect(container.querySelector("button[aria-label='React']")).toBeNull();
+  await act(async () => chip.click());
+  expect(sets()).toEqual([]);
+});

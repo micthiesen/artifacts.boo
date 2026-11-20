@@ -177,7 +177,8 @@ export function createDrawer(panel: HTMLElement, toggle: HTMLButtonElement, opts
       body.append(empty);
     }
     panel.replaceChildren(head, body);
-    if (focusKey) panel.querySelector<HTMLElement>(`[data-key="${focusKey}"]`)?.focus();
+    // A chip that went with your last reaction of its kind hands the focus to its comment's React button.
+    if (focusKey) (panel.querySelector<HTMLElement>(`[data-key="${focusKey}"]`) ?? panel.querySelector<HTMLElement>(`[data-key="${focusKey.replace(/^rx-(.+)-\d$/, "react-$1")}"]`))?.focus();
     else if (focusCard) cardEl(focusCard)?.focus({ preventScroll: true });
     if (pendingFocus) {
       const target = panel.querySelector(`[data-thread="${CSS.escape(pendingFocus)}"]`);

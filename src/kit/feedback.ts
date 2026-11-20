@@ -8,9 +8,10 @@ import * as store from "./store.ts";
 /**
  * Shows changes someone else makes to `key` or anything under `key/` arriving: the element `find` returns for
  * the rest of the key (or `root`) glows, and the first one gets the arrival sound. A write of yours the server
- * refused glows where it snapped back, with no sound (errors never play one).
+ * refused glows where it snapped back, with no sound (errors never play one). `quiet` arrivals glow without the
+ * sound: a reaction is quieter than a comment.
  */
-export function useArrivals(root: RefObject<HTMLElement | null>, key: string | null, find?: (rest: string, root: HTMLElement) => Element | null) {
+export function useArrivals(root: RefObject<HTMLElement | null>, key: string | null, find?: (rest: string, root: HTMLElement) => Element | null, quiet = false) {
   const finder = useRef(find);
   finder.current = find;
   useEffect(() => {
@@ -24,7 +25,7 @@ export function useArrivals(root: RefObject<HTMLElement | null>, key: string | n
         if (k === key) targets.add(el);
         else if (k.startsWith(prefix)) targets.add(finder.current?.(k.slice(prefix.length), el) ?? el);
       }
-      let first = kind === "remote";
+      let first = kind === "remote" && !quiet;
       for (const t of targets) {
         if (first) cue(t, "arrive");
         else move(t, "glow");

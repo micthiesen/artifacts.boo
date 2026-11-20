@@ -1,6 +1,7 @@
 // Comments, activity, visits, previews and notifications in the hub.
 import { afterEach, beforeEach, expect, mock, test } from "bun:test";
 import { connect, createHub, type Harness } from "./support/do-harness.ts";
+import { toOccurrence } from "../src/worker/events.ts";
 
 let h: Harness;
 const OWNER = "owner@example.com";
@@ -156,6 +157,54 @@ test("reactions go with their comment, and are limited per minute", async () => 
 
   h.hub.delete(id);
   expect(h.hub.exportPage("reactions", 0).rows).toEqual([]);
+});
+
+test("reactions in a Comments block: your own key, the fixed set, edit access; quiet, and gone with the comment", async () => {
+  const id = await make();
+  await ntfy(OWNER);
+  h.hub.setWatch(OWNER, id, "all");
+  const sam = await connect(h, { id, email: SAM, role: "edit" });
+  const owner = await connect(h, { id, email: OWNER, role: "owner" });
+  const dana = await connect(h, { id, email: DANA, role: "view" });
+  const anon = await connect(h, { id, email: null, role: "view" });
+  await sam.send({ t: "set", cid: "c1", key: "comments/main/0001-a", value: { text: "Shipping Friday" } });
+  await deliver();
+  const key = (email: string) => `react/main/0001-a/${email}`;
+
+  // The value is kept in the set's order, without repeats.
+  await owner.send({ t: "set", cid: "x1", key: key(OWNER), value: ["✅", "👍", "👍"] });
+  expect(last(sam)).toMatchObject({ t: "set", key: key(OWNER), value: ["👍", "✅"], by: OWNER });
+  // Nobody is told, and it is not a comment or an answer to anyone listening for those.
+  expect(await deliver()).toEqual([]);
+  const logged = { seq: 9, at: "2026-01-01T00:00:00Z", artifact: id, title: "Plan", actor: OWNER, type: "state", data: { key: key(OWNER), value: '["👍","✅"]', created: true } };
+  for (const name of ["comment.created", "artifact.answered"] as const) expect(toOccurrence(logged as never, name, ORIGIN)).toBeNull();
+  // An anonymous visitor on a public page and someone with view access see it, read-only.
+  expect(h.hub.state(id)[key(OWNER)]).toEqual(["👍", "✅"]);
+  for (const [who, cid] of [[dana, "x2"], [anon, "x3"]] as const) {
+    await who.send({ t: "set", cid, key: key(DANA), value: ["👍"] });
+    expect(last(who)).toMatchObject({ t: "rejected", cid });
+  }
+
+  // Not someone else's key, not outside the set, not a list, not on a comment that isn't there.
+  for (const [cid, k, value] of [["x4", key(OWNER), ["👍"]], ["x5", key(SAM), ["🔥"]], ["x6", key(SAM), "👍"], ["x7", `react/main/nope/${SAM}`, ["👍"]]] as const) {
+    await sam.send({ t: "set", cid, key: k, value: value as never });
+    expect(last(sam)).toMatchObject({ t: "rejected", cid });
+  }
+  // An agent can read them but not give one.
+  expect(() => h.hub.setState(id, { [key(OWNER)]: ["❤️"] }, null, undefined, { agent: true })).toThrow("made by people");
+  // A page's own keys under react/ that aren't a person's are left alone.
+  await sam.send({ t: "set", cid: "x8", key: "react/version", value: 19 });
+  expect(last(sam)).toMatchObject({ t: "set", key: "react/version", value: 19 });
+
+  // An empty list takes it back; the activity line says what stands.
+  await sam.send({ t: "set", cid: "x9", key: key(SAM), value: ["🎉"] });
+  await owner.send({ t: "set", cid: "x10", key: key(OWNER), value: [] });
+  expect(key(OWNER) in h.hub.state(id)).toBe(false);
+
+  // Deleting the comment removes the reactions to it, for everyone watching.
+  await sam.send({ t: "set", cid: "x11", key: "comments/main/0001-a", value: null });
+  expect(Object.keys(h.hub.state(id))).toEqual(["react/version"]);
+  expect(dana.socket.messages.filter((m: any) => m.t === "set" && m.value === null).map((m: any) => m.key)).toContain(key(SAM));
 });
 
 test("collab keys are stamped: no forged votes or edits of others' comments", async () => {

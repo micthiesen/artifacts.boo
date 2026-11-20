@@ -1,6 +1,6 @@
 // Live, shared components. Each stores one shared key per item so concurrent
 // edits by different people never overwrite each other.
-import { Check, Plus, Send, Trash2, X } from "./icons.ts";
+import { Check, Plus, Send, SmilePlus, Trash2, X } from "./icons.ts";
 import * as React from "react";
 import { useShared, useSharedMap, useViewer } from "../hooks.ts";
 import { Avatar, AvatarGroup, Badge, Button, Input, Label, Textarea } from "./primitives.tsx";
@@ -9,6 +9,7 @@ import { Table } from "./table.tsx";
 import { getBoot } from "../store.ts";
 import { cueAfterRender, moveAfterRender, useArrivals } from "../feedback.ts";
 import { cn, displayName, relativeTime, slugify, useNow } from "./utils.ts";
+import { REACTIONS } from "../../shared/protocol.ts";
 
 function ReadOnlyNote({ email }: { email: string | null }) {
   return (
@@ -280,6 +281,106 @@ export function Checklist({ id, items = [], allowAdd = false, className }: { id:
 // ---- Comments ---------------------------------------------------------------------
 
 type Comment = { by: string | null; text: string; at: number };
+/** One comment's reactions: who gave each emoji. */
+type Reacted = Map<string, string[]>;
+const NO_REACTIONS: Reacted = new Map();
+
+/** Who gave a reaction, you first: your own is said in words and not only by the chip's colour. */
+function reactors(emails: string[], me: string | null): string {
+  return namesList([...emails].sort((a, b) => Number(b === me) - Number(a === me)).map((e) => (e === me ? "You" : displayName(e))));
+}
+
+/** A chip per emoji a comment got. People who can write press theirs on and off; anyone else presses one to see who. */
+function ReactionChips({ commentKey, of, me, onToggle }: { commentKey: string; of: Reacted; me: string | null; onToggle?: (emoji: string) => void }) {
+  if (!of.size) return null;
+  return (
+    <div data-react={commentKey} className="mt-1.5 flex flex-wrap gap-1.5 max-sm:col-span-2">
+      {[...of].map(([emoji, who]) => {
+        const mine = me !== null && who.includes(me);
+        const names = reactors(who, me);
+        const chip = cn(
+          "inline-flex h-6 cursor-pointer items-center gap-1.5 rounded-full border px-2 text-[12.5px] tabular-nums outline-none transition-colors duration-(--motion-fast) ease-(--motion-ease) hover:bg-muted focus-visible:focus-halo active:bg-secondary",
+          mine ? "border-primary bg-primary/15 font-semibold text-foreground" : "border-input text-muted-foreground",
+        );
+        const body = (
+          <>
+            <span aria-hidden>{emoji}</span>
+            {who.length}
+          </>
+        );
+        return onToggle ? (
+          <button key={emoji} type="button" aria-pressed={mine} title={names} aria-label={`${REACTIONS[emoji]}: ${names}. Press to ${mine ? "take yours back" : "add yours"}.`} onClick={() => onToggle(emoji)} className={chip}>
+            {body}
+          </button>
+        ) : (
+          <Popover key={emoji}>
+            <PopoverTrigger render={<button type="button" />} aria-label={`${REACTIONS[emoji]}: ${names}`} className={chip}>
+              {body}
+            </PopoverTrigger>
+            <PopoverContent side="top" className="w-auto max-w-64 p-3">
+              <NameList title={`${emoji} ${REACTIONS[emoji]}`} emails={who} />
+            </PopoverContent>
+          </Popover>
+        );
+      })}
+    </div>
+  );
+}
+
+/** The React button on a comment: a menu of the six, with who gave each so far. */
+function ReactMenu({ of, me, onToggle, className }: { of: Reacted; me: string | null; onToggle: (emoji: string) => void; className?: string }) {
+  const [open, setOpen] = React.useState(false);
+  function onKeyDown(e: React.KeyboardEvent<HTMLDivElement>) {
+    const items = [...e.currentTarget.querySelectorAll<HTMLElement>("button")];
+    const at = items.indexOf(document.activeElement as HTMLElement);
+    const to = e.key === "ArrowRight" ? at + 1 : e.key === "ArrowLeft" ? at - 1 : e.key === "Home" ? 0 : e.key === "End" ? items.length - 1 : null;
+    if (to === null) return;
+    e.preventDefault();
+    items[(to + items.length) % items.length]?.focus();
+  }
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger
+        render={<button type="button" />}
+        aria-label="React"
+        className={cn("relative cursor-pointer rounded p-1 text-muted-foreground outline-none after:absolute after:-inset-1 after:content-[''] hover:text-foreground focus-visible:focus-halo active:text-foreground", className)}
+      >
+        <SmilePlus className="size-4" />
+      </PopoverTrigger>
+      <PopoverContent side="bottom" align="end" sideOffset={4} className="w-auto p-1">
+        <div role="menu" aria-label="React" className="flex" onKeyDown={onKeyDown}>
+          {Object.entries(REACTIONS).map(([emoji, name]) => (
+            <button
+              key={emoji}
+              type="button"
+              role="menuitemcheckbox"
+              aria-checked={me !== null && Boolean(of.get(emoji)?.includes(me))}
+              aria-label={name}
+              title={name}
+              onClick={() => {
+                onToggle(emoji);
+                setOpen(false);
+              }}
+              className="size-9 cursor-pointer rounded-[5px] text-lg hover:bg-muted focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary active:bg-secondary aria-checked:bg-primary/15 aria-checked:inset-ring aria-checked:inset-ring-primary"
+            >
+              {emoji}
+            </button>
+          ))}
+        </div>
+        {of.size > 0 && (
+          <div className="mx-1.5 mt-1 mb-0.5 grid gap-0.5 border-t border-border pt-1.5 text-[12.5px] text-muted-foreground">
+            {[...of].map(([emoji, who]) => (
+              <div key={emoji} className="flex gap-1.5 break-words">
+                <span aria-hidden>{emoji}</span>
+                <span className="min-w-0">{reactors(who, me)}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </PopoverContent>
+    </Popover>
+  );
+}
 
 /** Comment thread. Each comment lives at `comments/<id>/<time>-<rand>`; newest last. */
 export function Comments({ id = "main", title = "Comments", className }: { id?: string; title?: React.ReactNode; className?: string }) {
@@ -290,6 +391,37 @@ export function Comments({ id = "main", title = "Comments", className }: { id?: 
   const list = map.entries.filter(([, c]) => c && typeof c.text === "string");
   const root = React.useRef<HTMLElement>(null);
   useArrivals(root, `comments/${id}`, (key, el) => byData(el, "key", key));
+  // Reactions: each person's are their own key under the comment's (react/<id>/<comment>/<email>), a list of emoji.
+  const reacts = useSharedMap<string[]>(`react/${id}`);
+  const reacted = React.useMemo(() => {
+    const byComment = new Map<string, Reacted>();
+    // Emoji outermost, so each comment's come out in the order of REACTIONS.
+    for (const emoji of Object.keys(REACTIONS)) {
+      for (const [k, given] of reacts.entries) {
+        const cut = k.lastIndexOf("/");
+        if (cut < 0 || !Array.isArray(given) || !given.includes(emoji)) continue;
+        const of = byComment.get(k.slice(0, cut)) ?? new Map<string, string[]>();
+        of.set(emoji, [...(of.get(emoji) ?? []), k.slice(cut + 1)]);
+        byComment.set(k.slice(0, cut), of);
+      }
+    }
+    return byComment;
+  }, [reacts.entries]);
+  // Someone else's reaction glows on its chips (or on the comment, when it took the last chip away), without a sound.
+  useArrivals(root, `react/${id}`, (rest, el) => byData(el, "react", rest.slice(0, rest.lastIndexOf("/"))) ?? byData(el, "key", rest.slice(0, rest.lastIndexOf("/"))), true);
+
+  function react(commentKey: string, emoji: string) {
+    if (!viewer.canWrite || !viewer.email) return;
+    const mine = reacts.get(`${commentKey}/${viewer.email}`) ?? [];
+    const next = mine.includes(emoji) ? mine.filter((e) => e !== emoji) : [...mine, emoji];
+    if (next.length) reacts.set(`${commentKey}/${viewer.email}`, next);
+    else reacts.delete(`${commentKey}/${viewer.email}`);
+    // Taking back the only reaction of its kind removes the chip that was pressed: the focus goes to the comment's React button.
+    requestAnimationFrame(() => {
+      const comment = root.current && byData(root.current, "key", commentKey);
+      if (document.activeElement === document.body) comment?.querySelector<HTMLElement>("button[aria-label='React']")?.focus();
+    });
+  }
 
   function submit(e?: React.SyntheticEvent) {
     e?.preventDefault();
@@ -328,13 +460,15 @@ export function Comments({ id = "main", title = "Comments", className }: { id?: 
                     type="button"
                     aria-label="Delete comment"
                     onClick={() => confirm("Delete this comment?") && map.delete(key)}
-                    className="relative ml-auto cursor-pointer rounded p-1 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 after:absolute after:-inset-1 after:content-[''] hover:text-negative focus-visible:opacity-100 pointer-coarse:opacity-70"
+                    className="relative ml-auto cursor-pointer self-center rounded p-1 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 after:absolute after:-inset-1 after:content-[''] hover:text-negative focus-visible:opacity-100 pointer-coarse:opacity-70"
                   >
                     <Trash2 className="size-3.5" />
                   </button>
                 )}
+                {viewer.canWrite && <ReactMenu of={reacted.get(key) ?? NO_REACTIONS} me={viewer.email} onToggle={(emoji) => react(key, emoji)} className={cn("self-center", c.by === viewer.email ? "ml-1" : "ml-auto")} />}
               </div>
               <p className="-mt-1 text-[15px] leading-relaxed break-words whitespace-pre-wrap max-sm:col-span-2 max-sm:mt-1">{c.text}</p>
+              <ReactionChips commentKey={key} of={reacted.get(key) ?? NO_REACTIONS} me={viewer.email} onToggle={viewer.canWrite ? (emoji) => react(key, emoji) : undefined} />
             </div>
           </li>
         ))}
