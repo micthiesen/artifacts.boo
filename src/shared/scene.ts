@@ -251,6 +251,12 @@ function rows(shown: readonly { ask: NonNullable<LabelAsk>; i: number }[], width
   return out;
 }
 
+/**
+ * How much of a part a box hides, past the share a part's on-screen box can lose without the part being hidden:
+ * the box round its corners is bigger than the part looks, and a label over its corner hides nothing.
+ */
+const hides = (box: Rect, part: Rect) => Math.max(0, covers(box, part) - 0.25);
+
 /** What a direction costs, before anything is in the way: above is where a reader looks first. */
 const DIR_COST = { up: 0, right: 8, left: 8, down: 18 } as const;
 /** A side the author asked for is tried before any other. */
@@ -275,7 +281,7 @@ export function layoutLabels(asks: readonly LabelAsk[], width: number, height: n
     let best: { cost: number; box: Rect } | null = null;
     const row = packed.get(i);
     // Its place in a row with its neighbours comes first, so it wins a tie with going up on its own.
-    for (const c of [...(row ? [{ ...row, dir: "up" as const }] : []), ...candidates(ask)]) {
+    for (const c of [...(row ? [{ ...row, dir: "up" as const, row: true }] : []), ...candidates(ask)]) {
       // Pulled in from the sides, never past them; a label that doesn't fit top to bottom here is tried elsewhere.
       const left = Math.min(Math.max(c.left, LABEL_EDGE), width - ask.w - LABEL_EDGE);
       if (left < LABEL_EDGE - 0.01 || c.top < top || c.top + ask.h > height - LABEL_EDGE) continue;
@@ -284,6 +290,9 @@ export function layoutLabels(asks: readonly LabelAsk[], width: number, height: n
       if (dots.some((d) => d.x > box.left - DOT_CLEAR && d.x < box.right + DOT_CLEAR && d.y > box.top - DOT_CLEAR && d.y < box.bottom + DOT_CLEAR)) continue;
       const t = tip(ask.x, ask.y, box);
       let cost = Math.hypot(t.tipX - ask.x, t.tipY - ask.y) + DIR_COST[c.dir] + (ask.side && ask.side !== c.dir ? UNASKED : 0);
+      // Above or below, a label centred on its point reads best: off-centre costs a little, so a near tie stays put.
+      // A row is centred on its labels' points together.
+      if ((c.dir === "up" || c.dir === "down") && !("row" in c)) cost += 0.05 * Math.abs(box.left + ask.w / 2 - ask.x);
       for (const p of placed) {
         if (crosses(ask.x, ask.y, t.tipX, t.tipY, p.x, p.y, p.tipX, p.tipY)) cost += 30;
         if (through(ask.x, ask.y, t.tipX, t.tipY, p.box)) cost += 60;
@@ -291,8 +300,8 @@ export function layoutLabels(asks: readonly LabelAsk[], width: number, height: n
       }
       // A line running over another label's point makes it look like it names that one.
       for (const d of dots) if ((d.x !== ask.x || d.y !== ask.y) && distance(d.x, d.y, ask.x, ask.y, t.tipX, t.tipY) < DOT_CLEAR) cost += 20;
-      if (ask.part) cost += 60 * covers(box, ask.part);
-      for (const other of shown) if (other.ask !== ask && other.ask.part) cost += 15 * covers(box, other.ask.part);
+      if (ask.part) cost += 80 * hides(box, ask.part);
+      for (const other of shown) if (other.ask !== ask && other.ask.part) cost += 20 * hides(box, other.ask.part);
       if (!best || cost < best.cost - 1e-9) best = { cost, box };
     }
     if (!best) continue;
