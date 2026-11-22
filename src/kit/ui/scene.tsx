@@ -106,7 +106,7 @@ function SceneInner({ title, description, build, deps = [], view = "angle", step
     show();
     // Content above it that renders late (a chart, another scene) would push it down again.
     const resized = new ResizeObserver(show);
-    resized.observe(document.body);
+    resized.observe(document.getElementById("root") ?? document.body);
     return () => resized.disconnect();
   }, []);
   const settled = React.useCallback(() => release.current?.(), []);
