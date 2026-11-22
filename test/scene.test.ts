@@ -4,7 +4,12 @@ import { describe, expect, test } from "bun:test";
 import {
   clampOrbit,
   countPixels,
+  covers,
   fitDistance,
+  heldLabels,
+  holdOf,
+  labelTrouble,
+  labelWarning,
   layoutLabels,
   MAX_DRAW_CALLS,
   MAX_LABELS,
@@ -23,6 +28,8 @@ import {
   VIEW_ORBIT,
   viewOf,
   ZOOM_MAX,
+  type LabelAsk,
+  type LabelSpot,
   type Rgb,
   type SceneStats,
 } from "../src/shared/scene.ts";
@@ -169,24 +176,73 @@ describe("steps", () => {
 });
 
 describe("labels", () => {
-  const box = (spot: NonNullable<ReturnType<typeof layoutLabels>[number]>, ask: { w: number; h: number }) => ({ left: spot.left, top: spot.top, right: spot.left + ask.w, bottom: spot.top + ask.h });
+  const box = (spot: NonNullable<LabelSpot>, ask: { w: number; h: number }) => ({ left: spot.left, top: spot.top, right: spot.left + ask.w, bottom: spot.top + ask.h });
+  const apart = (a: ReturnType<typeof box>, b: ReturnType<typeof box>) => a.right <= b.left || b.right <= a.left || a.bottom <= b.top || b.bottom <= a.top;
+  const clearOf = (b: ReturnType<typeof box>, x: number, y: number) => x <= b.left || x >= b.right || y <= b.top || y >= b.bottom;
+  /** Every shown label inside the view, clear of every other label and of every point a label names. */
+  const tidy = (asks: LabelAsk[], spots: LabelSpot[], width: number, height: number) => {
+    const boxes = spots.map((s, i) => (s && asks[i] ? box(s, asks[i]!) : null));
+    for (const [i, a] of boxes.entries()) {
+      if (!a) continue;
+      expect(a.left).toBeGreaterThanOrEqual(0);
+      expect(a.top).toBeGreaterThanOrEqual(0);
+      expect(a.right).toBeLessThanOrEqual(width);
+      expect(a.bottom).toBeLessThanOrEqual(height);
+      for (const b of boxes.slice(i + 1)) if (b) expect(apart(a, b)).toBe(true);
+      for (const ask of asks) if (ask) expect(clearOf(a, ask.x, ask.y)).toBe(true);
+    }
+  };
 
   test("a label sits above its point, with a line down to it", () => {
     const [spot] = layoutLabels([{ x: 100, y: 100, w: 40, h: 20 }], 300, 200);
     expect(spot).toEqual({ left: 80, top: 70, tipX: 100, tipY: 90 });
   });
 
-  test("labels for things stacked on one spot don't cover each other, and each still fits the view", () => {
+  test("labels for things stacked on one spot fan out around it, cover neither each other nor the spot, and fit the view", () => {
     const asks = Array.from({ length: 5 }, () => ({ x: 150, y: 60, w: 60, h: 20 }));
     const spots = layoutLabels(asks, 300, 200);
-    const boxes = spots.map((s, i) => box(s!, asks[i]!));
-    for (const [i, a] of boxes.entries()) {
-      for (const b of boxes.slice(i + 1)) expect(a.bottom <= b.top || b.bottom <= a.top).toBe(true);
-      expect(a.top).toBeGreaterThanOrEqual(0);
-      expect(a.bottom).toBeLessThanOrEqual(200);
-    }
-    // Moved below its point, a label's line comes up to its top edge.
-    expect(spots[4]!.tipY).toBe(spots[4]!.top);
+    expect(spots.every(Boolean)).toBe(true);
+    tidy(asks, spots, 300, 200);
+    // Some go out to the sides, with their line meeting the edge that faces the point.
+    const sides = spots.filter((s) => s!.left > 150 || s!.left + 60 < 150);
+    expect(sides.length).toBeGreaterThan(0);
+  });
+
+  test("two small parts side by side on a phone: their labels sit side by side, not stacked or over each other", () => {
+    // Two fittings 4 units apart in a scene drawn about 6 px a unit, in a scene 316 px wide (a phone).
+    const asks = [
+      { x: 146, y: 200, w: 96, h: 19 },
+      { x: 170, y: 200, w: 96, h: 19 },
+    ];
+    const spots = layoutLabels(asks, 316, 420);
+    tidy(asks, spots, 316, 420);
+    const [a, b] = spots.map((s, i) => box(s!, asks[i]!));
+    // Level with each other, one to the left of the other, in the same order as their points.
+    expect(a!.top).toBe(b!.top);
+    expect(a!.right).toBeLessThanOrEqual(b!.left);
+    expect(labelTrouble(["Left fitting", "Right fitting"], asks, spots)).toEqual([]);
+  });
+
+  test("a label asked to go to a side goes there when there is room", () => {
+    const asks: LabelAsk[] = [
+      { x: 150, y: 100, w: 50, h: 20, side: "left" },
+      { x: 150, y: 140, w: 50, h: 20, side: "right" },
+    ];
+    const [l, r] = layoutLabels(asks, 300, 200);
+    expect(l!.left + 50).toBeLessThanOrEqual(150);
+    expect(r!.left).toBeGreaterThanOrEqual(150);
+    // Its line runs level to the box's near edge.
+    expect(l!.tipX).toBe(l!.left + 50);
+    expect(r!.tipY).toBe(140);
+  });
+
+  test("a label keeps off the small part it names when there is room beside it", () => {
+    // A fitting just above its point: straight above, the label would hide over half of it.
+    const part = { left: 135, top: 76, right: 165, bottom: 100 };
+    const above = { left: 130, top: 70, right: 170, bottom: 90 };
+    expect(covers(above, part)).toBeGreaterThan(0.5);
+    const [spot] = layoutLabels([{ x: 150, y: 100, w: 40, h: 20, part }], 300, 200);
+    expect(covers(box(spot!, { w: 40, h: 20 }), part)).toBeLessThan(0.1);
   });
 
   test("labels beside each other stay where they are, and one at the edge is pulled inside", () => {
@@ -198,18 +254,51 @@ describe("labels", () => {
     expect(spots[2]!.tipX).toBeLessThanOrEqual(spots[2]!.left + 80);
   });
 
-  test("a strip kept free at the top pushes a label down, not out", () => {
+  test("a strip kept free at the top moves a label clear of it, and off its point", () => {
     const [spot] = layoutLabels([{ x: 100, y: 30, w: 40, h: 20 }], 300, 200, 26);
-    expect(spot!.top).toBe(26);
-    // Now on its point: the line has nowhere to go.
-    expect(spot!.tipY).toBe(30);
+    expect(spot!.top).toBeGreaterThanOrEqual(26);
+    expect(clearOf(box(spot!, { w: 40, h: 20 }), 100, 30)).toBe(true);
   });
 
   test("a point out of view has no label, and neither has one there is no room left for", () => {
     expect(layoutLabels([null, { x: 50, y: 50, w: 40, h: 20 }], 300, 200)).toEqual([null, { left: 30, top: 20, tipX: 50, tipY: 40 }]);
-    const crowded = layoutLabels(Array.from({ length: 4 }, () => ({ x: 50, y: 30, w: 40, h: 20 })), 100, 70);
-    expect(crowded.filter(Boolean)).toHaveLength(3);
-    expect(crowded[3]).toBeNull();
+    const asks = Array.from({ length: 6 }, () => ({ x: 50, y: 30, w: 40, h: 20 }));
+    const crowded = layoutLabels(asks, 100, 70);
+    expect(crowded.some((s) => s === null)).toBe(true);
+    tidy(asks, crowded, 100, 70);
+  });
+
+  test("while the camera moves, labels keep their place beside their points and stay in the view", () => {
+    const asks = [{ x: 100, y: 100, w: 40, h: 20 }, null];
+    const holds = holdOf(asks, layoutLabels(asks, 300, 200));
+    expect(holds).toEqual([{ dx: -20, dy: -30 }, null]);
+    expect(heldLabels([{ x: 150, y: 120, w: 40, h: 20 }, null], holds, 300, 200)).toEqual([{ left: 130, top: 90, tipX: 150, tipY: 110 }, null]);
+    // Turned so its point is at the very edge: the label stays inside.
+    expect(heldLabels([{ x: 299, y: 10, w: 40, h: 20 }], holds, 300, 200)[0]!.left).toBe(258);
+  });
+
+  test("the render check names labels that overlap, point too close together, cover their part or found no room", () => {
+    const asks: LabelAsk[] = [
+      { x: 100, y: 100, w: 60, h: 20 },
+      { x: 105, y: 102, w: 60, h: 20 },
+      { x: 200, y: 100, w: 40, h: 20, part: { left: 190, top: 60, right: 230, bottom: 100 } },
+      { x: 250, y: 150, w: 40, h: 20 },
+      null,
+    ];
+    const spots: LabelSpot[] = [{ left: 70, top: 70, tipX: 100, tipY: 90 }, { left: 90, top: 75, tipX: 105, tipY: 95 }, { left: 190, top: 70, tipX: 200, tipY: 90 }, null, null];
+    const texts = ["Stainless nipple", "Tape here", "Tee", "OUT", "Away"];
+    const trouble = labelTrouble(texts, asks, spots);
+    expect(trouble).toEqual([
+      { kind: "overlap", a: "Stainless nipple", b: "Tape here" },
+      { kind: "close", a: "Stainless nipple", b: "Tape here", px: 5 },
+      { kind: "covers", a: "Tee", share: 0.5 },
+      { kind: "hidden", a: "OUT" },
+    ]);
+    const said = labelWarning(trouble, 'Scene "Plumbing", step 2, on a phone (390 px)')!;
+    expect(said).toStartWith('Scene "Plumbing", step 2, on a phone (390 px): labels crowd: "Stainless nipple" and "Tape here" overlap; ');
+    expect(said).toContain('"Tee" covers 50% of the part it names');
+    expect(said).toContain('{ side: "left" | "right" | "up" }');
+    expect(labelWarning([], "x")).toBeNull();
   });
 });
 

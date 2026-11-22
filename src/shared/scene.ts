@@ -130,48 +130,256 @@ export function sheetCell(i: number, count: number, width: number, height: numbe
 
 // ---- labels ------------------------------------------------------------------
 
-/** A label to place: where its point is in the view, and how big its text is. Null when the point isn't in view. */
-export type LabelAsk = { x: number; y: number; w: number; h: number } | null;
+/** Where a label may be pushed out to, when its parts are small and close together (`label(text, at, { side })`). */
+export const LABEL_SIDES = ["left", "right", "up"] as const;
+export type LabelSide = (typeof LABEL_SIDES)[number];
+export type LabelOptions = { side?: LabelSide };
+
+/** A box on screen, in the view's pixels. */
+export type Rect = { left: number; top: number; right: number; bottom: number };
+
+/**
+ * A label to place: where its point is in the view, how big its text is, the side its author asked for, and
+ * the box its own part takes up on screen (when it names a part). Null when the point isn't in view.
+ */
+export type LabelAsk = { x: number; y: number; w: number; h: number; side?: LabelSide; part?: Rect | null } | null;
 /** Where a label's box goes, and where its leader line meets it. Null when it isn't shown. */
 export type LabelSpot = { left: number; top: number; tipX: number; tipY: number } | null;
 
 const LABEL_STEM = 10;
-const LABEL_GAP = 2;
+const LABEL_GAP = 3;
 const LABEL_EDGE = 2;
+/** No label covers a point another label (or itself) names: the dot stays this clear. */
+const DOT_CLEAR = 5;
+/** Two points closer than this on screen can't be told apart, whatever their labels do. */
+export const POINTS_APART = 12;
+
+type Candidate = { left: number; top: number; dir: "up" | "down" | LabelSide };
+
+/** Where the line from (x, y) meets the box: the nearest point of its edge. */
+function tip(x: number, y: number, b: Rect): { tipX: number; tipY: number } {
+  const tipX = x < b.left ? b.left : x > b.right ? b.right : Math.min(Math.max(x, b.left + 3), b.right - 3);
+  const tipY = y < b.top ? b.top : y > b.bottom ? b.bottom : y;
+  return { tipX, tipY };
+}
+
+const area = (r: Rect) => Math.max(0, r.right - r.left) * Math.max(0, r.bottom - r.top);
+const overlap = (a: Rect, b: Rect): number => area({ left: Math.max(a.left, b.left), top: Math.max(a.top, b.top), right: Math.min(a.right, b.right), bottom: Math.min(a.bottom, b.bottom) });
+const intersects = (a: Rect, b: Rect, gap = 0) => a.left < b.right + gap && a.right + gap > b.left && a.top < b.bottom + gap && a.bottom + gap > b.top;
+/** How much of `part` the box covers, 0 to 1. */
+export const covers = (box: Rect, part: Rect): number => (area(part) > 0 ? overlap(box, part) / area(part) : 0);
+
+/** Whether segments p1p2 and p3p4 cross. */
+function crosses(ax: number, ay: number, bx: number, by: number, cx: number, cy: number, dx: number, dy: number): boolean {
+  const d = (bx - ax) * (dy - cy) - (by - ay) * (dx - cx);
+  if (d === 0) return false;
+  const t = ((cx - ax) * (dy - cy) - (cy - ay) * (dx - cx)) / d;
+  const u = ((cx - ax) * (by - ay) - (cy - ay) * (bx - ax)) / d;
+  return t > 0.02 && t < 0.98 && u > 0.02 && u < 0.98;
+}
+
+/** Whether the segment from (ax, ay) to (bx, by) passes through the box. */
+function through(ax: number, ay: number, bx: number, by: number, r: Rect): boolean {
+  for (let k = 1; k < 8; k++) {
+    const x = ax + ((bx - ax) * k) / 8;
+    const y = ay + ((by - ay) * k) / 8;
+    if (x > r.left && x < r.right && y > r.top && y < r.bottom) return true;
+  }
+  return false;
+}
+
+/** How far the point (px, py) is from the segment from (ax, ay) to (bx, by). */
+function distance(px: number, py: number, ax: number, ay: number, bx: number, by: number): number {
+  const [dx, dy] = [bx - ax, by - ay];
+  const t = dx || dy ? Math.min(1, Math.max(0, ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy))) : 0;
+  return Math.hypot(px - ax - t * dx, py - ay - t * dy);
+}
+
+/** The places a label could go around its point: above first, then out to either side, then below. */
+function candidates(ask: NonNullable<LabelAsk>): Candidate[] {
+  const { x, y, w, h } = ask;
+  const out: Candidate[] = [];
+  const row = h + LABEL_GAP;
+  for (let lift = 0; lift < 4; lift++) {
+    for (let k = 0; k <= 12; k++) {
+      // 0, then alternately right and left, further each time, out to a little past the label's own width.
+      const dx = k === 0 ? 0 : (k % 2 ? 1 : -1) * Math.ceil(k / 2) * ((w + 24) / 6);
+      out.push({ left: x - w / 2 + dx, top: y - LABEL_STEM - h - lift * row, dir: "up" });
+    }
+  }
+  for (const reach of [0, 14, 30, 50]) {
+    for (const dy of [0, -1, 1, -2, 2]) {
+      const top = y - h / 2 + dy * row;
+      out.push({ left: x + LABEL_STEM + reach, top, dir: "right" }, { left: x - LABEL_STEM - reach - w, top, dir: "left" });
+    }
+  }
+  for (let lift = 0; lift < 2; lift++) {
+    for (let k = 0; k <= 8; k++) {
+      const dx = k === 0 ? 0 : (k % 2 ? 1 : -1) * Math.ceil(k / 2) * ((w + 24) / 6);
+      out.push({ left: x - w / 2 + dx, top: y + LABEL_STEM + lift * row, dir: "down" });
+    }
+  }
+  return out;
+}
 
 /**
- * Places labels above their points without covering each other: things stacked on top of one another (the
- * units of a rack, anything seen from above) put their points close together or on the same spot. A label that
- * would land on another moves down until it is clear, and a line back to its point says whose it is. One that
- * no longer fits the view isn't shown. `top` keeps a strip at the top of the view free (the render check's
- * caption).
+ * For labels whose boxes would collide above their points: the same labels packed side by side in one row
+ * above them all, in the order of their points and centred on them, so neighbours fan out left and right with
+ * the lines kept short. Each label's place in its row, by index; a row too wide for the view isn't made.
+ */
+function rows(shown: readonly { ask: NonNullable<LabelAsk>; i: number }[], width: number): Map<number, { left: number; top: number }> {
+  const out = new Map<number, { left: number; top: number }>();
+  const home = shown.map(({ ask }) => ({ left: ask.x - ask.w / 2, top: ask.y - LABEL_STEM - ask.h, right: ask.x + ask.w / 2, bottom: ask.y - LABEL_STEM }));
+  const group = shown.map((_, k) => k);
+  const root = (k: number): number => (group[k] === k ? k : (group[k] = root(group[k]!)));
+  for (let a = 0; a < shown.length; a++) for (let b = a + 1; b < shown.length; b++) if (intersects(home[a]!, home[b]!, LABEL_GAP)) group[root(a)] = root(b);
+  const clusters = new Map<number, number[]>();
+  for (let k = 0; k < shown.length; k++) clusters.set(root(k), [...(clusters.get(root(k)) ?? []), k]);
+  for (const members of clusters.values()) {
+    if (members.length < 2) continue;
+    members.sort((a, b) => shown[a]!.ask.x - shown[b]!.ask.x);
+    const total = members.reduce((sum, k) => sum + shown[k]!.ask.w, 0) + LABEL_GAP * (members.length - 1);
+    if (total > width - 2 * LABEL_EDGE) continue;
+    const middle = members.reduce((sum, k) => sum + shown[k]!.ask.x, 0) / members.length;
+    let left = Math.min(Math.max(middle - total / 2, LABEL_EDGE), width - total - LABEL_EDGE);
+    const top = Math.min(...members.map((k) => home[k]!.top));
+    for (const k of members) {
+      out.set(shown[k]!.i, { left, top });
+      left += shown[k]!.ask.w + LABEL_GAP;
+    }
+  }
+  return out;
+}
+
+/** What a direction costs, before anything is in the way: above is where a reader looks first. */
+const DIR_COST = { up: 0, right: 8, left: 8, down: 18 } as const;
+/** A side the author asked for is tried before any other. */
+const UNASKED = 40;
+
+/**
+ * Places labels around their points without covering each other or any point a label names. Each label goes
+ * where its line is shortest and crosses nothing: above its point when there is room, else fanned out to
+ * a side or higher up with a longer line, else below. Parts that are small and close together put their
+ * points close together, so their labels fan out left and right of the cluster. A label for which there is
+ * no room in the view isn't shown. `top` keeps a strip at the top of the view free (the render check's
+ * caption). Labels are placed top to bottom, so the ones a reader meets first get the best spots.
  */
 export function layoutLabels(asks: readonly LabelAsk[], width: number, height: number, top = LABEL_EDGE): LabelSpot[] {
   const spots: LabelSpot[] = asks.map(() => null);
-  const placed: { left: number; top: number; w: number; h: number }[] = [];
-  const order = asks
-    .map((ask, i) => ({ ask, i }))
-    .filter((a): a is { ask: NonNullable<LabelAsk>; i: number } => a.ask !== null)
-    .sort((a, b) => a.ask.y - a.ask.h - (b.ask.y - b.ask.h) || a.i - b.i);
+  const shown = asks.map((ask, i) => ({ ask, i })).filter((a): a is { ask: NonNullable<LabelAsk>; i: number } => a.ask !== null);
+  const dots = shown.map(({ ask }) => ({ x: ask.x, y: ask.y }));
+  const placed: { box: Rect; x: number; y: number; tipX: number; tipY: number }[] = [];
+  const order = [...shown].sort((a, b) => a.ask.y - b.ask.y || a.ask.x - b.ask.x || a.i - b.i);
+  const packed = rows(shown, width);
   for (const { ask, i } of order) {
-    const left = Math.min(Math.max(ask.x - ask.w / 2, LABEL_EDGE), Math.max(LABEL_EDGE, width - ask.w - LABEL_EDGE));
-    let at = Math.max(ask.y - ask.h - LABEL_STEM, top);
-    for (let moved = true; moved; ) {
-      moved = false;
-      for (const b of placed) {
-        if (left < b.left + b.w + LABEL_GAP && left + ask.w + LABEL_GAP > b.left && at < b.top + b.h + LABEL_GAP && at + ask.h + LABEL_GAP > b.top) {
-          at = b.top + b.h + LABEL_GAP;
-          moved = true;
-        }
+    let best: { cost: number; box: Rect } | null = null;
+    const row = packed.get(i);
+    // Its place in a row with its neighbours comes first, so it wins a tie with going up on its own.
+    for (const c of [...(row ? [{ ...row, dir: "up" as const }] : []), ...candidates(ask)]) {
+      // Pulled in from the sides, never past them; a label that doesn't fit top to bottom here is tried elsewhere.
+      const left = Math.min(Math.max(c.left, LABEL_EDGE), width - ask.w - LABEL_EDGE);
+      if (left < LABEL_EDGE - 0.01 || c.top < top || c.top + ask.h > height - LABEL_EDGE) continue;
+      const box = { left, top: c.top, right: left + ask.w, bottom: c.top + ask.h };
+      if (placed.some((p) => intersects(box, p.box, LABEL_GAP))) continue;
+      if (dots.some((d) => d.x > box.left - DOT_CLEAR && d.x < box.right + DOT_CLEAR && d.y > box.top - DOT_CLEAR && d.y < box.bottom + DOT_CLEAR)) continue;
+      const t = tip(ask.x, ask.y, box);
+      let cost = Math.hypot(t.tipX - ask.x, t.tipY - ask.y) + DIR_COST[c.dir] + (ask.side && ask.side !== c.dir ? UNASKED : 0);
+      for (const p of placed) {
+        if (crosses(ask.x, ask.y, t.tipX, t.tipY, p.x, p.y, p.tipX, p.tipY)) cost += 30;
+        if (through(ask.x, ask.y, t.tipX, t.tipY, p.box)) cost += 60;
+        if (through(p.x, p.y, p.tipX, p.tipY, box)) cost += 40;
       }
+      // A line running over another label's point makes it look like it names that one.
+      for (const d of dots) if ((d.x !== ask.x || d.y !== ask.y) && distance(d.x, d.y, ask.x, ask.y, t.tipX, t.tipY) < DOT_CLEAR) cost += 20;
+      if (ask.part) cost += 60 * covers(box, ask.part);
+      for (const other of shown) if (other.ask !== ask && other.ask.part) cost += 15 * covers(box, other.ask.part);
+      if (!best || cost < best.cost - 1e-9) best = { cost, box };
     }
-    if (at + ask.h > height - LABEL_EDGE) continue;
-    placed.push({ left, top: at, w: ask.w, h: ask.h });
-    const tipX = Math.min(Math.max(ask.x, left + 3), left + ask.w - 3);
-    // The line runs to the edge of the box that faces the point; a box sitting on its point needs none.
-    spots[i] = { left, top: at, tipX, tipY: at + ask.h <= ask.y ? at + ask.h : at >= ask.y ? at : ask.y };
+    if (!best) continue;
+    const t = tip(ask.x, ask.y, best.box);
+    placed.push({ box: best.box, x: ask.x, y: ask.y, ...t });
+    spots[i] = { left: best.box.left, top: best.box.top, ...t };
   }
   return spots;
+}
+
+/** A label's place relative to its point, kept while the reader turns the scene so the labels move with it. */
+export type LabelHold = { dx: number; dy: number } | null;
+export const holdOf = (asks: readonly LabelAsk[], spots: readonly LabelSpot[]): LabelHold[] =>
+  spots.map((s, i) => (s && asks[i] ? { dx: s.left - asks[i]!.x, dy: s.top - asks[i]!.y } : null));
+
+/**
+ * The labels where they were relative to their points, for frames drawn while the camera is still moving: a
+ * fresh layout each frame would make labels jump from side to side as the scene turns. Kept inside the view.
+ * Labels are laid out again (layoutLabels) once the camera settles.
+ */
+export function heldLabels(asks: readonly LabelAsk[], holds: readonly LabelHold[], width: number, height: number, top = LABEL_EDGE): LabelSpot[] {
+  return asks.map((ask, i) => {
+    const hold = holds[i];
+    if (!ask || !hold) return null;
+    const left = Math.min(Math.max(ask.x + hold.dx, LABEL_EDGE), Math.max(LABEL_EDGE, width - ask.w - LABEL_EDGE));
+    const at = Math.min(Math.max(ask.y + hold.dy, top), Math.max(top, height - ask.h - LABEL_EDGE));
+    return { left, top: at, ...tip(ask.x, ask.y, { left, top: at, right: left + ask.w, bottom: at + ask.h }) };
+  });
+}
+
+/** What the render check found wrong with one view's labels. */
+export type LabelTrouble =
+  | { kind: "overlap"; a: string; b: string }
+  | { kind: "close"; a: string; b: string; px: number }
+  | { kind: "covers"; a: string; share: number }
+  | { kind: "hidden"; a: string };
+
+/** A label covering this much of its own part's box on screen hides what it names. */
+export const COVERS_PART = 0.5;
+
+/**
+ * Judges one view's labels as laid out: boxes that overlap, points too close to tell apart, a label sitting
+ * over most of the part it names, and labels left out for lack of room. Labels whose point is out of view
+ * (a null ask) aren't judged.
+ */
+export function labelTrouble(texts: readonly string[], asks: readonly LabelAsk[], spots: readonly LabelSpot[]): LabelTrouble[] {
+  const out: LabelTrouble[] = [];
+  const box = (i: number): Rect | null => {
+    const s = spots[i];
+    const a = asks[i];
+    return s && a ? { left: s.left, top: s.top, right: s.left + a.w, bottom: s.top + a.h } : null;
+  };
+  for (let i = 0; i < asks.length; i++) {
+    const a = asks[i];
+    if (!a) continue;
+    const bi = box(i);
+    if (!bi) {
+      out.push({ kind: "hidden", a: texts[i]! });
+      continue;
+    }
+    for (let j = i + 1; j < asks.length; j++) {
+      const b = asks[j];
+      if (!b) continue;
+      const bj = box(j);
+      if (bj && intersects(bi, bj)) out.push({ kind: "overlap", a: texts[i]!, b: texts[j]! });
+      const px = Math.hypot(a.x - b.x, a.y - b.y);
+      if (px < POINTS_APART) out.push({ kind: "close", a: texts[i]!, b: texts[j]!, px: Math.round(px) });
+    }
+    if (a.part) {
+      const share = covers(bi, a.part);
+      if (share >= COVERS_PART) out.push({ kind: "covers", a: texts[i]!, share });
+    }
+  }
+  return out;
+}
+
+/** The render check's warning for one view's trouble, or null when there is none. `where` says which step and width. */
+export function labelWarning(trouble: readonly LabelTrouble[], where: string): string | null {
+  if (!trouble.length) return null;
+  const q = (s: string) => `"${s}"`;
+  const said = trouble.map((t) =>
+    t.kind === "overlap" ? `${q(t.a)} and ${q(t.b)} overlap`
+    : t.kind === "close" ? `${q(t.a)} and ${q(t.b)} point to places ${t.px} px apart, too close to tell which is which`
+    : t.kind === "covers" ? `${q(t.a)} covers ${Math.round(t.share * 100)}% of the part it names`
+    : `${q(t.a)} has no room and isn't shown`,
+  );
+  return `${where}: labels crowd: ${said.join("; ")}. Keep one or two labels on small neighbouring parts and say the rest in the step's text, anchor labels further apart, or push one out with label(text, at, { side: "left" | "right" | "up" })`;
 }
 
 // ---- colours ---------------------------------------------------------------

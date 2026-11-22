@@ -5,9 +5,15 @@
 // a viewer's browser.
 import { signToken } from "./session.ts";
 
+/**
+ * What the check looks for changes now and then (labels that crowd came in 2); a stored result from an older
+ * one isn't reused for the same version, as it never looked.
+ */
+export const CHECK_LOGIC = 2;
+
 export type RenderCheck =
-  | { status: "ok"; ms: number; textLength: number }
-  | { status: "errors"; ms: number; errors: string[] }
+  | { status: "ok"; ms: number; textLength: number; warnings?: string[]; logic?: number }
+  | { status: "errors"; ms: number; errors: string[]; warnings?: string[]; logic?: number }
   | { status: "skipped"; reason: string }
   | { status: "queued"; inSeconds: number };
 
@@ -24,11 +30,16 @@ export const SCREENSHOT_VIEWPORT = { width: 1024, height: 768 };
 /** A phone, for checks of how a page reads there. */
 export const PHONE_VIEWPORT = { width: 390, height: 844, deviceScaleFactor: 1, isMobile: true, hasTouch: true };
 
-/** How to look at the page: the stored check is the default (desktop, first screen); the rest are on demand. */
-export type CheckView = { phone?: boolean; fullPage?: boolean; section?: string };
-export const isDefaultView = (v?: CheckView) => !v || (!v.phone && !v.fullPage && !v.section);
+/**
+ * How to look at the page: the stored check is the default (desktop, first screen); the rest are on demand.
+ * `scene` (its number on the page from 1, or its title) and `step` (from 1) show one <Scene> as a reader sees
+ * it, full size, instead of the check's sheet of small views.
+ */
+export type CheckView = { phone?: boolean; fullPage?: boolean; section?: string; scene?: string; step?: number };
+export const isDefaultView = (v?: CheckView) => !v || (!v.phone && !v.fullPage && !v.section && !v.scene && !v.step);
 export function describeView(v?: CheckView): string {
   const size = v?.phone ? "390×844 (phone)" : "1024×768";
+  if (v?.scene || v?.step) return `scene ${/^\d+$/.test(v.scene ?? "1") ? (v.scene ?? "1") : `"${v.scene}"`}${v.step ? `, step ${v.step}` : ""}, as a reader first sees it, ${size}`;
   return v?.fullPage ? `the whole page at ${v.phone ? "phone width (390)" : "1024 wide"}` : v?.section ? `the screen at #${v.section}, ${size}` : `the first screen (${size})`;
 }
 
@@ -45,7 +56,10 @@ export async function renderCheck(
   // Single use: the frame spends it when it loads, so a copy that leaks (say, printed by the page) is already dead.
   const token = await signToken(env.SESSION_SECRET, "frame", 120, { id, w: workspace, c: true, j: crypto.randomUUID() });
   // A query parameter, not a #fragment: Browser Run doesn't keep fragments.
-  const section = view?.section ? `&section=${encodeURIComponent(view.section)}` : "";
+  const section =
+    (view?.section ? `&section=${encodeURIComponent(view.section)}` : "") +
+    (view?.scene || view?.step ? `&scene=${encodeURIComponent(view.scene ?? "1")}` : "") +
+    (view?.step ? `&step=${view.step}` : "");
   const url = `${origin}/frame/${id}?v=${version}&check=1&t=${encodeURIComponent(token)}${section}`;
   const started = Date.now();
   let res: Response;
@@ -90,7 +104,7 @@ export async function renderCheck(
   const screenshot = body.result.screenshot;
   const html = body.result.content ?? "";
   const raw = /<pre id="art-check"[^>]*>([\s\S]*?)<\/pre>/.exec(html)?.[1];
-  let parsed: { status?: string; errors?: string[]; textLength?: number } | null = null;
+  let parsed: { status?: string; errors?: string[]; warnings?: string[]; textLength?: number } | null = null;
   try {
     parsed = raw ? JSON.parse(decodeEntities(raw)) : null;
   } catch {
@@ -107,10 +121,11 @@ export async function renderCheck(
     return { check: { status: "skipped", reason: `no render result; the page showed: ${shown || "(nothing)"}` } };
   }
   const errors = Array.isArray(parsed.errors) ? parsed.errors.map(String) : [];
+  const warnings = Array.isArray(parsed.warnings) && parsed.warnings.length ? { warnings: parsed.warnings.map(String) } : {};
   if (parsed.status === "error" || errors.length) {
-    return { check: { status: "errors", ms, errors: errors.length ? errors : ["The artifact failed to render."] }, screenshot };
+    return { check: { status: "errors", ms, errors: errors.length ? errors : ["The artifact failed to render."], ...warnings, logic: CHECK_LOGIC }, screenshot };
   }
-  return { check: { status: "ok", ms, textLength: Number(parsed.textLength ?? 0) }, screenshot };
+  return { check: { status: "ok", ms, textLength: Number(parsed.textLength ?? 0), ...warnings, logic: CHECK_LOGIC }, screenshot };
 }
 
 function decodeEntities(s: string): string {
@@ -120,6 +135,12 @@ function decodeEntities(s: string): string {
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
     .replace(/&amp;/g, "&");
+}
+
+/** Warnings from the save and from the render check, in one list, as write results and artifact_check print them. */
+export function describeWarnings(...lists: (readonly string[] | undefined)[]): string {
+  const all = lists.flatMap((l) => l ?? []);
+  return all.length ? `\nWarnings (saved anyway; fix with another edit):\n${all.map((w) => `- ${w}`).join("\n")}` : "";
 }
 
 export function describeCheck(check: RenderCheck): string {

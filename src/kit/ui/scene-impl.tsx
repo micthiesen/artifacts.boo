@@ -17,6 +17,11 @@ import {
   clampOrbit,
   countPixels,
   fitDistance,
+  heldLabels,
+  holdOf,
+  LABEL_SIDES,
+  labelTrouble,
+  labelWarning,
   layoutLabels,
   mixOrbit,
   orbitPosition,
@@ -31,7 +36,13 @@ import {
   VIEW_ORBIT,
   viewOf,
   VIEWS,
+  type LabelAsk,
+  type LabelHold,
+  type LabelOptions,
+  type LabelSide,
+  type LabelTrouble,
   type Orbit,
+  type Rect,
   type Rgb,
   type SceneColorName,
   type SceneStats,
@@ -54,8 +65,12 @@ export type SceneContext = {
   colors: SceneColors;
   /** A matte mesh with its edges drawn, in the kit's look. Position it and add it to the scene yourself. */
   solid: (geometry: THREE.BufferGeometry, color?: THREE.ColorRepresentation) => THREE.Mesh;
-  /** Names a place or an object, as text over the scene. */
-  label: (text: string, at: ScenePoint) => void;
+  /**
+   * Names a place or an object, as text over the scene with a line to it. The kit places it clear of the other
+   * labels and the points they name; `side` pushes it out to the left, the right or up when the kit's choice
+   * isn't the one you want.
+   */
+  label: (text: string, at: ScenePoint, options?: LabelOptions) => void;
   /** In a stepped scene, the step to build, counted from 0; otherwise 0. */
   step: number;
 };
@@ -77,6 +92,8 @@ type ImplProps = {
   handle: React.RefObject<SceneHandle | null>;
   /** The scene has drawn (or can't): the render check may finish. */
   onSettled: () => void;
+  /** artifact_check asked for this scene as a reader sees it, full size: judged as usual, but no sheet of views. */
+  shot?: boolean;
 };
 
 type Rig = {
@@ -96,6 +113,9 @@ type Built = {
   scene: THREE.Scene;
   texts: string[];
   places: THREE.Vector3[];
+  sides: (LabelSide | undefined)[];
+  /** The part each label names: the object it was put on, or the part its point is on. Null for a point in the air. */
+  parts: (THREE.Object3D | null)[];
   /** For a label put on an object: the object, and where the label sits in the object's own frame, so it rides along when the part glides or turns. */
   anchors: (Anchor | null)[];
   /** Meshes, lines, points and sprites. */
@@ -120,6 +140,8 @@ const FOV = 32;
 const DRAG_TURN = 0.008;
 const KEY_TURN = Math.PI / 12;
 const ZOOM_STEP = 1.25;
+/** A wheel zoom has ended when no wheel event has come for this long. */
+const ZOOM_SETTLE_MS = 150;
 /** A touch that moves less than this is a tap. */
 const TAP_SLOP = 10;
 /** Room for a view's name above its labels, in the render check. */
@@ -177,7 +199,7 @@ function allFinite(root: THREE.Object3D): boolean {
 function construct(build: SceneBuild, r: Rig, step: number, check: boolean): Built {
   const scene = new THREE.Scene();
   const frame: Frame = { center: new THREE.Vector3(), half: [1, 1, 1], radius: 1 };
-  const found: { text: string; at: ScenePoint }[] = [];
+  const found: { text: string; at: ScenePoint; side?: LabelSide }[] = [];
   try {
     build({
       scene,
@@ -189,11 +211,15 @@ function construct(build: SceneBuild, r: Rig, step: number, check: boolean): Bui
         mesh.add(new THREE.LineSegments(new THREE.EdgesGeometry(geometry, 30), new THREE.LineBasicMaterial({ color: r.colors.edge })));
         return mesh;
       },
-      label: (text, at) => void found.push({ text: String(text), at }),
+      label: (text, at, options) => {
+        const side = options?.side;
+        if (side !== undefined && !LABEL_SIDES.includes(side)) throw new Error(`label("${String(text)}", at, { side }): side is one of ${LABEL_SIDES.map((v) => `"${v}"`).join(", ")}`);
+        found.push({ text: String(text), at, ...(side ? { side } : {}) });
+      },
     });
   } catch (err) {
     dispose(scene);
-    return { scene: new THREE.Scene(), texts: [], places: [], anchors: [], objects: 0, finite: true, lit: false, frame, error: err instanceof Error ? err : new Error(String(err)) };
+    return { scene: new THREE.Scene(), texts: [], places: [], sides: [], parts: [], anchors: [], objects: 0, finite: true, lit: false, frame, error: err instanceof Error ? err : new Error(String(err)) };
   }
   scene.updateMatrixWorld(true);
   let objects = 0;
@@ -218,7 +244,30 @@ function construct(build: SceneBuild, r: Rig, step: number, check: boolean): Bui
     return part.isObject3D ? { part, local: part.worldToLocal(places[i]!.clone()) } : null;
   });
   const finite = !check || (allFinite(scene) && places.every((v) => Number.isFinite(v.x + v.y + v.z)));
-  return { scene, texts: found.map((f) => f.text), places, anchors, objects, finite, lit, frame, error: null };
+  const parts = found.map((f, i) => ((f.at as THREE.Object3D).isObject3D ? (f.at as THREE.Object3D) : partAt(scene, places[i]!, frame.radius)));
+  return { scene, texts: found.map((f) => f.text), places, sides: found.map((f) => f.side), parts, anchors, objects, finite, lit, frame, error: null };
+}
+
+/**
+ * The part a point is on: the smallest mesh whose bounds hold it (with a little slack, as points are put on
+ * a surface), taken up to the nearest named object, which is what a stepped scene calls a part.
+ */
+export function partAt(scene: THREE.Object3D, at: THREE.Vector3, radius: number): THREE.Object3D | null {
+  const slack = radius * 0.03;
+  let best: { mesh: THREE.Object3D; volume: number } | null = null;
+  const bounds = new THREE.Box3();
+  const size = new THREE.Vector3();
+  scene.traverse((o) => {
+    if (!(o as THREE.Mesh).isMesh) return;
+    bounds.setFromObject(o).expandByScalar(slack);
+    if (bounds.isEmpty() || !bounds.containsPoint(at)) return;
+    bounds.getSize(size);
+    const volume = size.x * size.y * size.z;
+    if (!best || volume < best.volume) best = { mesh: o, volume };
+  });
+  if (!best) return null;
+  for (let o: THREE.Object3D | null = (best as { mesh: THREE.Object3D }).mesh; o && o !== scene; o = o.parent) if (o.name) return o;
+  return (best as { mesh: THREE.Object3D }).mesh;
 }
 
 const poseOf = (o: THREE.Object3D): Pose => ({ p: o.position.clone(), q: o.quaternion.clone(), s: o.scale.clone() });
@@ -280,16 +329,22 @@ const mixFrame = (a: Frame, b: Frame, e: number): Frame => ({
   radius: a.radius + (b.radius - a.radius) * e,
 });
 
-/** Stands the camera on its orbit, framing `f` for a view of this shape. */
-function aim(r: Rig, f: Frame, o: Orbit, aspect: number) {
+/** Stands a camera on its orbit, framing `f` for a view of this shape; returns how far back it stands. */
+export function aimCamera(camera: THREE.PerspectiveCamera, f: Frame, o: Orbit, aspect: number): number {
   const distance = fitDistance(f.half, o, FOV, aspect) / o.zoom;
-  r.camera.position.set(...orbitPosition([f.center.x, f.center.y, f.center.z], distance, o));
-  r.camera.aspect = aspect;
-  r.camera.near = Math.max(f.radius / 200, distance - f.radius * 1.05);
-  r.camera.far = distance + f.radius * 1.05;
-  r.camera.lookAt(f.center);
-  r.camera.updateProjectionMatrix();
-  r.camera.updateMatrixWorld();
+  camera.position.set(...orbitPosition([f.center.x, f.center.y, f.center.z], distance, o));
+  camera.aspect = aspect;
+  camera.near = Math.max(f.radius / 200, distance - f.radius * 1.05);
+  camera.far = distance + f.radius * 1.05;
+  camera.lookAt(f.center);
+  camera.updateProjectionMatrix();
+  camera.updateMatrixWorld();
+  return distance;
+}
+
+/** Stands the camera on its orbit, framing `f` for a view of this shape, and brings the key light along. */
+function aim(r: Rig, f: Frame, o: Orbit, aspect: number) {
+  const distance = aimCamera(r.camera, f, o, aspect);
   // The key light rides above and to the left of the camera, so no side the reader turns to is left unlit.
   const m = r.camera.matrixWorld.elements;
   const [side, lift] = [-0.5 * distance, 0.7 * distance];
@@ -299,20 +354,77 @@ function aim(r: Rig, f: Frame, o: Orbit, aspect: number) {
 }
 
 const projected = new THREE.Vector3();
-/**
- * Puts one picture's labels where their places are on screen, inside the picture at (x, y) of size w by h: each
- * label's text, and the line and dot that tie it to its place.
- */
-function placeTags(tags: HTMLCollection | undefined, leaders: HTMLCollection | undefined, places: THREE.Vector3[], camera: THREE.Camera, x: number, y: number, w: number, h: number, top?: number) {
-  if (!tags || !leaders) return;
-  const asks = places.map((at, i) => {
+const corner = new THREE.Vector3();
+const partBounds = new THREE.Box3();
+
+/** Where a part is on screen in a view w by h: the box round its bounds' corners, cut to the view. */
+function screenBox(part: THREE.Object3D, camera: THREE.Camera, w: number, h: number): Rect | null {
+  partBounds.setFromObject(part);
+  if (partBounds.isEmpty()) return null;
+  const r = { left: Infinity, top: Infinity, right: -Infinity, bottom: -Infinity };
+  for (let k = 0; k < 8; k++) {
+    corner.set(k & 1 ? partBounds.max.x : partBounds.min.x, k & 2 ? partBounds.max.y : partBounds.min.y, k & 4 ? partBounds.max.z : partBounds.min.z).project(camera);
+    if (!Number.isFinite(corner.x + corner.y) || corner.z <= -1 || corner.z >= 1) return null;
+    const [x, y] = [(corner.x * 0.5 + 0.5) * w, (0.5 - corner.y * 0.5) * h];
+    r.left = Math.min(r.left, x);
+    r.right = Math.max(r.right, x);
+    r.top = Math.min(r.top, y);
+    r.bottom = Math.max(r.bottom, y);
+  }
+  const cut = { left: Math.max(0, r.left), top: Math.max(0, r.top), right: Math.min(w, r.right), bottom: Math.min(h, r.bottom) };
+  return cut.right > cut.left && cut.bottom > cut.top ? cut : null;
+}
+
+/** What layoutLabels needs to place a build's labels in a view w by h: each point on screen, its text's size, its side and its part. */
+export function labelAsks(b: Pick<Built, "places" | "sides" | "parts">, camera: THREE.Camera, w: number, h: number, sizes: readonly ({ w: number; h: number } | null)[]): LabelAsk[] {
+  return b.places.map((at, i) => {
     projected.copy(at).project(camera);
     // Not in this view, or nowhere at all (a place worked out from a missing number).
     if (!Number.isFinite(projected.x + projected.y + projected.z) || projected.z <= -1 || projected.z >= 1 || Math.abs(projected.x) > 1 || Math.abs(projected.y) > 1) return null;
-    const el = tags[i] as HTMLElement | undefined;
-    return el ? { x: (projected.x * 0.5 + 0.5) * w, y: (0.5 - projected.y * 0.5) * h, w: el.offsetWidth, h: el.offsetHeight } : null;
+    const size = sizes[i];
+    if (!size) return null;
+    const part = b.parts[i];
+    return { x: (projected.x * 0.5 + 0.5) * w, y: (0.5 - projected.y * 0.5) * h, w: size.w, h: size.h, side: b.sides[i], part: part ? screenBox(part, camera, w, h) : null };
   });
-  layoutLabels(asks, w, h, top).forEach((spot, i) => {
+}
+
+/** How a build's labels fare in its starting view at one size, laid out as a reader would see them. */
+export function judgeLabels(b: Pick<Built, "places" | "sides" | "parts" | "texts" | "frame">, o: Orbit, w: number, h: number, sizes: readonly ({ w: number; h: number } | null)[]): LabelTrouble[] {
+  const camera = new THREE.PerspectiveCamera(FOV, w / h);
+  aimCamera(camera, b.frame, o, w / h);
+  const asks = labelAsks(b, camera, w, h, sizes);
+  return labelTrouble(b.texts, asks, layoutLabels(asks, w, h));
+}
+
+/** The width a scene is on a phone (390 px), from how wide it is now and how much of the page's width is spent around it. */
+function phoneWidth(el: HTMLElement, now: number): number {
+  const page = el.closest<HTMLElement>(".art-page");
+  let around = window.innerWidth - now;
+  // The page's own side padding changes with the width (Page: px-5 on a phone); what sits inside it doesn't.
+  if (page) {
+    const style = getComputedStyle(page);
+    around = PHONE_PAGE_PAD * 2 + page.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight) - now;
+  }
+  return Math.round(Math.min(now, Math.max(160, PHONE_WIDTH - around)));
+}
+const PHONE_WIDTH = 390;
+const PHONE_PAGE_PAD = 20;
+
+/**
+ * Puts one picture's labels where their places are on screen, inside the picture at (x, y) of size w by h: each
+ * label's text, and the line and dot that tie it to its place. While the camera moves, labels keep where they
+ * were relative to their points (`hold`); once it settles they are laid out afresh.
+ */
+function placeTags(tags: HTMLCollection | undefined, leaders: HTMLCollection | undefined, b: Built, camera: THREE.Camera, x: number, y: number, w: number, h: number, top: number | undefined, hold: { current: LabelHold[] | null } | null) {
+  if (!tags || !leaders) return;
+  const sizes = b.places.map((_, i) => {
+    const el = tags[i] as HTMLElement | undefined;
+    return el ? { w: el.offsetWidth, h: el.offsetHeight } : null;
+  });
+  const asks = labelAsks(b, camera, w, h, sizes);
+  const spots = hold?.current ? heldLabels(asks, hold.current, w, h, top) : layoutLabels(asks, w, h, top);
+  if (hold && !hold.current) hold.current = holdOf(asks, spots);
+  spots.forEach((spot, i) => {
     const el = tags[i] as HTMLElement | undefined;
     const leader = leaders[i] as SVGGElement | undefined;
     const ask = asks[i];
@@ -338,8 +450,12 @@ type Drawn = Pick<SceneStats, "calls" | "triangles" | "lines" | "points">;
 /** What a frame drew, picture by picture, and the size it was drawn at. */
 type Sheet = { shots: Drawn[]; width: number; height: number };
 
-export default function SceneImpl({ title, describedBy, build, deps, view, height, steps, step, stepByKey, handle, onSettled }: ImplProps) {
-  const check = getBoot()?.check === true;
+export default function SceneImpl({ title, describedBy, build, deps, view, height, steps, step, stepByKey, handle, onSettled, shot = false }: ImplProps) {
+  /** In the render check: what is wrong is reported. */
+  const judged = getBoot()?.check === true;
+  // `check` is the check's sheet of small views. The scene artifact_check asked to see is drawn as a reader
+  // sees it instead, and judged all the same.
+  const check = judged && !shot;
   const stepped = !!steps?.length;
   /** The render check draws four sides of a scene, or every step of a stepped one. */
   const pictures = stepped ? steps.length : 4;
@@ -364,8 +480,12 @@ export default function SceneImpl({ title, describedBy, build, deps, view, heigh
   const fingers = React.useRef(new Map<number, { x: number; y: number }>());
   const tap = React.useRef<{ id: number; x: number; y: number } | null>(null);
   const spread = React.useRef(0);
-  const latest = React.useRef({ build, title, view, steps, step, stepByKey, sheetHeight, onSettled });
-  latest.current = { build, title, view, steps, step, stepByKey, sheetHeight, onSettled };
+  /** A wheel or trackpad zoom in progress: labels hold until it has been quiet a moment. */
+  const zooming = React.useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  /** Each picture's labels relative to their points while the camera moves; null once it has settled. */
+  const holds = React.useRef<{ current: LabelHold[] | null }[]>([]);
+  const latest = React.useRef({ build, title, view, steps, step, stepByKey, sheetHeight, height, onSettled });
+  latest.current = { build, title, view, steps, step, stepByKey, sheetHeight, height, onSettled };
 
   /** Each picture's labels: one picture for a reader, several in the render check. */
   const [labels, setLabels] = React.useState<string[][]>([]);
@@ -397,8 +517,12 @@ export default function SceneImpl({ title, describedBy, build, deps, view, heigh
       r.renderer.setViewport(x, h - y - vh, vw, vh);
       r.renderer.setScissor(x, h - y - vh, vw, vh);
       r.renderer.render(b.scene, r.camera);
-      // In the render check each picture has its name in the top corner; labels start below it.
-      placeTags(tags.current?.children[slot]?.children, leaders.current?.children[slot]?.children, b.places, r.camera, x, y, vw, vh, check ? CAPTION_HEIGHT : undefined);
+      // In the render check each picture has its name in the top corner; labels start below it. Labels are
+      // laid out when the camera is still, and held where they are while it moves (a drag, a glide).
+      const still = !moving.current && fingers.current.size === 0 && zooming.current === undefined;
+      const hold = (holds.current[slot] ??= { current: null });
+      if (still) hold.current = null;
+      placeTags(tags.current?.children[slot]?.children, leaders.current?.children[slot]?.children, b, r.camera, x, y, vw, vh, check ? CAPTION_HEIGHT : undefined, still ? null : hold);
       const { calls, triangles, lines, points } = r.renderer.info.render;
       return { calls, triangles, lines, points };
     };
@@ -497,7 +621,7 @@ export default function SceneImpl({ title, describedBy, build, deps, view, heigh
     } catch {
       setFailure("webgl");
       // On a reader's device that is the device's limit. In the render check it means nothing was looked at.
-      if (check) post({ t: "error", message: `Scene "${latest.current.title}": WebGL didn't start in the render check, so the scene wasn't drawn or checked. Keep to a few scenes a page; with only a few, run artifact_check again` });
+      if (judged) post({ t: "error", message: `Scene "${latest.current.title}": WebGL didn't start in the render check, so the scene wasn't drawn or checked. Keep to a few scenes a page; with only a few, run artifact_check again` });
       latest.current.onSettled();
       return;
     }
@@ -539,7 +663,7 @@ export default function SceneImpl({ title, describedBy, build, deps, view, heigh
       renderer.forceContextLoss();
       rig.current = null;
     };
-  }, [draw, check]);
+  }, [draw, check, judged]);
 
   // The build, again whenever what it reads changes or the reader moves to another step. The camera keeps its
   // orbit and frames what is there now. The render check of a stepped scene builds every step, to draw them all.
@@ -548,7 +672,7 @@ export default function SceneImpl({ title, describedBy, build, deps, view, heigh
     if (!r) return;
     const now = latest.current;
     const which = check && now.steps?.length ? now.steps.map((_, i) => i) : [now.step];
-    const builts = which.map((i) => construct(now.build, r, i, check));
+    const builts = which.map((i) => construct(now.build, r, i, judged));
     const failed = builts.flatMap((b, k) => (b.error ? [{ error: b.error, at: which[k]! }] : []));
     for (const b of next.current?.builts ?? []) dispose(b.scene);
     next.current = null;
@@ -592,6 +716,7 @@ export default function SceneImpl({ title, describedBy, build, deps, view, heigh
     unlight(r);
     for (const b of shown.current) dispose(b.scene);
     shown.current = fresh.builts;
+    holds.current = [];
     const built = fresh.builts[0]!;
     // A step seen from another side than the one the reader came from turns the camera there as its parts
     // move; between steps seen from the same side the camera stays where the reader has it.
@@ -610,24 +735,57 @@ export default function SceneImpl({ title, describedBy, build, deps, view, heigh
       ...(side ? { camera: (e: number) => void (orbit.current = e < 1 ? mixOrbit(from.orbit, VIEW_ORBIT[side], e) : { ...VIEW_ORBIT[side] }) } : {}),
     });
     const sheet = draw();
-    if (check && sheet) {
+    if (judged && sheet) {
       const gl = r.renderer.getContext();
       const scale = gl.drawingBufferWidth / sheet.width;
+      // Which step each build is: all of them on the sheet, or the one showing.
+      const stepOf = (i: number) => (check ? i : fresh.step);
       // A stepped scene is judged step by step; any other by the side readers start on, the first picture.
-      for (const i of now.steps?.length ? fresh.builts.map((_, k) => k) : [0]) {
-        const at = sheetCell(i, sheet.shots.length, sheet.width, sheet.height);
+      for (const i of check && now.steps?.length ? fresh.builts.map((_, k) => k) : [0]) {
+        const at = check ? sheetCell(i, sheet.shots.length, sheet.width, sheet.height) : { x: 0, y: 0, w: sheet.width, h: sheet.height };
         const [w, h] = [Math.floor(at.w * scale), Math.floor(at.h * scale)];
         const rgba = new Uint8Array(w * h * 4);
         // WebGL counts rows from the bottom.
         gl.readPixels(Math.round(at.x * scale), gl.drawingBufferHeight - Math.round(at.y * scale) - h, w, h, gl.RGBA, gl.UNSIGNED_BYTE, rgba);
         const b = fresh.builts[i]!;
         for (const problem of sceneProblems({ objects: b.objects, finite: b.finite, labels: b.texts.length, ...sheet.shots[i]!, pixels: countPixels(rgba, r.card) })) {
-          post({ t: "error", message: `Scene "${now.title}"${now.steps?.length ? `, step ${i + 1}` : ""}: ${problem}` });
+          post({ t: "error", message: `Scene "${now.title}"${now.steps?.length ? `, step ${stepOf(i) + 1}` : ""}: ${problem}` });
         }
       }
+      for (const warning of crowding(fresh.builts, stepOf, sheet.width)) post({ t: "warning", message: warning });
     }
     now.onSettled();
-  }, [labels, draw, run, stop, check]);
+  }, [labels, draw, run, stop, check, judged]);
+
+  /**
+   * The render check's word on labels: each step (or the one build) laid out as a reader first sees it, at the
+   * width the scene has on a phone and at 1024 px, judged for labels that crowd. The sheet's pictures are
+   * too small to show it.
+   */
+  const crowding = (builts: Built[], stepOf: (i: number) => number, wide: number): string[] => {
+    const { steps: all, view: side, title: name, height: tall } = latest.current;
+    // Checked on a phone (artifact_check phone), the scene is already as wide as it is on one.
+    const widths: (readonly [number, string])[] =
+      window.innerWidth < 600 ? [[wide, "on a phone (390 px)"]] : [[box.current ? phoneWidth(box.current, wide) : wide, "on a phone (390 px)"], [wide, "at 1024 px"]];
+    const out: string[] = [];
+    builts.forEach((b, i) => {
+      if (b.texts.length < 1) return;
+      const slot = tags.current?.children[i]?.children;
+      const sizes = b.texts.map((_, k) => {
+        const el = slot?.[k] as HTMLElement | undefined;
+        // A label not laid out (a scene in a closed section) has no size to judge.
+        return el?.offsetWidth ? { w: el.offsetWidth, h: el.offsetHeight } : null;
+      });
+      const o = VIEW_ORBIT[all?.length ? stepViewAt(all, stepOf(i), side) : side];
+      const said = new Map<string, string[]>();
+      for (const [w, where] of widths) {
+        const body = labelWarning(judgeLabels(b, o, w, tall, sizes), "");
+        if (body) said.set(body, [...(said.get(body) ?? []), where]);
+      }
+      for (const [body, wheres] of said) out.push(`Scene "${name}"${all?.length ? `, step ${stepOf(i) + 1}` : ""}, ${wheres.join(" and ")}${body}`);
+    });
+    return out;
+  };
 
   // A plain wheel scrolls the page past the scene. With Ctrl or ⌘ it zooms, which is also how a trackpad pinch arrives.
   React.useEffect(() => {
@@ -637,11 +795,20 @@ export default function SceneImpl({ title, describedBy, build, deps, view, heigh
       if (!e.ctrlKey && !e.metaKey) return;
       e.preventDefault();
       setUsed(true);
+      clearTimeout(zooming.current);
+      zooming.current = setTimeout(() => {
+        zooming.current = undefined;
+        requestDraw();
+      }, ZOOM_SETTLE_MS);
       turn({ ...orbit.current, zoom: orbit.current.zoom * Math.exp(-e.deltaY * 0.01) });
     };
     el.addEventListener("wheel", wheel, { passive: false });
-    return () => el.removeEventListener("wheel", wheel);
-  }, [turn]);
+    return () => {
+      el.removeEventListener("wheel", wheel);
+      clearTimeout(zooming.current);
+      zooming.current = undefined;
+    };
+  }, [turn, requestDraw]);
 
   // A touch anywhere else hands the finger back to the page.
   React.useEffect(() => {
@@ -697,7 +864,8 @@ export default function SceneImpl({ title, describedBy, build, deps, view, heigh
     spread.current = apart;
   };
   const onPointerEnd = (e: React.PointerEvent<HTMLDivElement>) => {
-    fingers.current.delete(e.pointerId);
+    // The last finger off: the labels are laid out again for where the camera came to rest.
+    if (fingers.current.delete(e.pointerId) && fingers.current.size === 0) requestDraw();
     spread.current = 0;
     const start = tap.current;
     tap.current = null;

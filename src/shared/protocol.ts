@@ -20,6 +20,8 @@ export type FrameMessage =
   | { t: "local:set"; key: string; value: JsonValue | undefined }
   | { t: "shared:set"; key: string; value: JsonValue | undefined }
   | { t: "error"; message: string; stack?: string }
+  /** Render check only: something a reader would trip over that isn't an error (labels that crowd). */
+  | { t: "warning"; message: string }
   | { t: "open"; url: string }
   /** The viewer chose "Comment" on a selection or element. */
   | { t: "comment:new"; anchor: Anchor }
@@ -204,7 +206,7 @@ export type FrameBoot = {
   /**
    * Render check: the frame is loaded top-level by a headless browser. It boots
    * without a shell, records errors in `window.__artErrors`, and sets
-   * `<pre id="art-check">{status, errors, textLength}</pre>` once the first render settles.
+   * `<pre id="art-check">{status, errors, warnings, textLength}</pre>` once the first render settles.
    */
   check?: boolean;
   /** Uploaded files by path ("assets/logo.png") -> short-lived URL. */

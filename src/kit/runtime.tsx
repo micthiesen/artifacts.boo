@@ -4,7 +4,7 @@ import * as React from "react";
 import { createRoot, type Root } from "react-dom/client";
 import type { FrameBoot, FrameMessage, JsonValue, ShellMessage } from "../shared/protocol.ts";
 import * as store from "./store.ts";
-import { checkHeld } from "./check.ts";
+import { checkHeld, shotProblem } from "./check.ts";
 import { ErrorBoundary, ErrorPanel } from "./ui/error.tsx";
 import { TooltipProvider } from "./ui/controls.tsx";
 import { Page } from "./ui/layout.tsx";
@@ -220,6 +220,9 @@ export async function boot(options: BootOptions = {}): Promise<void> {
   const checkErrors: string[] = [];
   (window as { __artErrors?: string[] }).__artErrors = checkErrors;
   const send = (m: FrameMessage) => {
+    // Warnings are for the agent that saved the page, so they go to the render check and nowhere else.
+    // A scene built again (new deps) says the same thing again: once is enough.
+    if (m.t === "warning") return void (check && !checkWarnings.includes(m.message) && checkWarnings.push(m.message));
     if (!check) return parent.postMessage(m, "*");
     if (m.t === "error") checkErrors.push(m.message);
   };
@@ -403,6 +406,8 @@ export async function boot(options: BootOptions = {}): Promise<void> {
       if (checkHeld() && Date.now() - started < CHECK_HOLD_MS) return void setTimeout(finish, 50);
       // Still held: say so, rather than pass a page whose scene nobody looked at.
       if (checkHeld()) checkErrors.push("A 3D scene hadn't finished drawing when the render check ended, so it wasn't checked: run artifact_check again, and make the scene lighter if it keeps happening");
+      const missed = shotProblem();
+      if (missed) checkErrors.push(missed);
       emitCheck(checkErrors.length ? "error" : "rendered", checkErrors, rootEl);
     };
     setTimeout(finish, 600);
@@ -449,6 +454,8 @@ window.addEventListener("afterprint", () => {
   restorePrint = null;
 });
 
+const checkWarnings: string[] = [];
+
 /** Publishes the render-check result as `<pre id="art-check">` JSON for the headless reader. */
 function emitCheck(status: "rendered" | "error", errors: string[], rootEl: HTMLElement) {
   if (document.getElementById("art-check")) return;
@@ -456,7 +463,7 @@ function emitCheck(status: "rendered" | "error", errors: string[], rootEl: HTMLE
   el.id = "art-check";
   // Kept inside the viewport (1px, transparent): the scraper skips off-screen elements.
   el.style.cssText = "position:fixed;left:0;bottom:0;width:1px;height:1px;margin:0;overflow:hidden;opacity:0;pointer-events:none";
-  el.textContent = JSON.stringify({ status, errors, textLength: rootEl.textContent?.trim().length ?? 0 });
+  el.textContent = JSON.stringify({ status, errors, warnings: checkWarnings, textLength: rootEl.textContent?.trim().length ?? 0 });
   document.body.appendChild(el);
 }
 

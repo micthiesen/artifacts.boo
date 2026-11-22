@@ -6,7 +6,7 @@ import type { EventsResult, HubApi, PollInput, SourceInfo, SubscribeInput, Unsub
 import { EVENT_ERRORS, EVENT_TYPES, EVENTS_EXTENSION } from "./events.ts";
 import { ANCHOR_TARGET_MAX, type Thread } from "../shared/protocol.ts";
 import { isValidPrincipal, sharePrincipal } from "./principal.ts";
-import { describeCheck, describeView, isDefaultView, type CheckView, type RenderCheck } from "./check.ts";
+import { describeCheck, describeView, describeWarnings, isDefaultView, type CheckView, type RenderCheck } from "./check.ts";
 import { toB64 } from "./snapshot.ts";
 import { CASE_STATUSES, caseUrl, draftAnnouncement, isOperator, linkedPages, openCase, placeOf, readLinkedPage, replyToCase, stamp, SUPPORT_SLUG, updateCase, type CaseKind, type CaseStatus, type CaseUpdate } from "./support.ts";
 import type { SupportCase } from "./directory.ts";
@@ -226,9 +226,7 @@ async function writeResult(r: Awaited<ReturnType<Workspace["create"]>>, ctx: Ctx
   const out = { ...r, url: url(origin, r.id), renderCheck: check };
   const shot = withScreenshot && screenshot;
   return {
-    text: `Saved ${r.id} v${r.version}: ${out.url}\nFiles: ${r.files.join(", ")}\n${describeCheck(check)}${
-      r.warnings?.length ? `\nWarnings (saved anyway; fix with another edit):\n${r.warnings.map((w) => `- ${w}`).join("\n")}` : ""
-    }${
+    text: `Saved ${r.id} v${r.version}: ${out.url}\nFiles: ${r.files.join(", ")}\n${describeCheck(check)}${describeWarnings(r.warnings, "warnings" in check ? check.warnings : undefined)}${
       shot ? "\nScreenshot of the first screen (1024×768) attached." : screenshot ? "\nartifact_check returns a screenshot." : ""
     }`,
     structured: out,
@@ -1095,7 +1093,7 @@ export const TOOLS: Tool[] = [
     name: "artifact_check",
     title: "artifacts.boo: render check",
     description:
-      "artifacts.boo: render the current version in a headless browser, report runtime errors, and return a screenshot (by default the first screen at 1024×768). Writes already run the check; use this to see the page, re-check, or collect a queued result. To see more: phone (390 wide, how most readers see it), fullPage (the whole page, top to bottom), or section (a heading slug or element id to start the screenshot at).",
+      "artifacts.boo: render the current version in a headless browser, report runtime errors and warnings, and return a screenshot (by default the first screen at 1024×768). Writes already run the check; use this to see the page, re-check, or collect a queued result. To see more: phone (390 wide, how most readers see it), fullPage (the whole page, top to bottom), section (a heading slug or element id to start the screenshot at), or step and scene (one <Scene> full size as a reader first sees it, at that step, instead of the check's small views).",
     inputSchema: {
       type: "object",
       properties: {
@@ -1104,6 +1102,8 @@ export const TOOLS: Tool[] = [
         phone: { type: "boolean", description: "Look at it 390 px wide, as on a phone." },
         fullPage: { type: "boolean", description: "Screenshot the whole page, not just the first screen." },
         section: { type: "string", description: "Scroll to this heading slug (\"## Bread & butter\" is bread-butter) or element id first." },
+        step: { type: "integer", minimum: 1, maximum: 8, description: "Show this step (from 1) of a stepped <Scene>, full size, as a reader first sees it." },
+        scene: { type: "string", description: "Which <Scene> to show: its number on the page from 1, or its title. Default the first. Without step, it shows the scene's starting view full size." },
       },
       required: ["id"],
       additionalProperties: false,
@@ -1113,17 +1113,22 @@ export const TOOLS: Tool[] = [
     run: async (args, ctx) => {
       const meta = await ctx.hub.meta(String(args.id));
       if (!meta) return { isError: true, text: `No artifact ${args.id}; see artifact_list.` };
+      if (typeof args.section === "string" && args.section && (args.scene !== undefined || args.step !== undefined)) {
+        return { isError: true, text: "Pass section, or scene and step, not both: each scrolls the page to what it names." };
+      }
       const view: CheckView = {
         ...(args.phone === true ? { phone: true } : {}),
         ...(args.fullPage === true ? { fullPage: true } : {}),
         ...(typeof args.section === "string" && args.section ? { section: args.section.replace(/^#/, "").slice(0, 200) } : {}),
+        ...(typeof args.scene === "string" && args.scene.trim() ? { scene: args.scene.trim().slice(0, 200) } : typeof args.scene === "number" ? { scene: String(args.scene) } : {}),
+        ...(Number.isInteger(args.step) && Number(args.step) >= 1 ? { step: Math.min(Number(args.step), 8) } : {}),
       };
       const { check, screenshot } = isDefaultView(view) ? await checkAndRecord(ctx, meta.id) : await ctx.hub.runRenderCheck(meta.id, ctx.origin, true, view);
       // A very tall page makes an image too big to be useful; looking a section at a time works.
       const tooBig = Boolean(screenshot && screenshot.length > SCREENSHOT_B64_MAX);
       const shot = args.screenshot !== false && !tooBig && screenshot;
       return {
-        text: `v${meta.version}: ${describeCheck(check)}${shot ? `\nScreenshot of ${describeView(view)} attached.` : tooBig ? "\nThe page is too tall for one screenshot: pass section to look at part of it." : ""}${
+        text: `v${meta.version}: ${describeCheck(check)}${describeWarnings("warnings" in check ? check.warnings : undefined)}${shot ? `\nScreenshot of ${describeView(view)} attached.` : tooBig ? "\nThe page is too tall for one screenshot: pass section to look at part of it." : ""}${
           shot ? "\nScreenshots don't show shared state: read answers (Decisions, Polls, Approvals, Checklists, Forms, Ledgers, Notes, Comments) with artifact_state." : ""
         }`,
         structured: { version: meta.version, renderCheck: check },

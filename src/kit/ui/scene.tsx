@@ -1,9 +1,9 @@
 import * as React from "react";
 import { canMove, stepTo, type StepState } from "../../shared/diagram-steps.ts";
 import { stepProblem, VIEWS, type SceneStep, type SceneView } from "../../shared/scene.ts";
-import { holdCheck } from "../check.ts";
+import { checkShot, claimShot, holdCheck } from "../check.ts";
 import { useKeyWidget } from "../key-widget.ts";
-import { getBoot } from "../store.ts";
+import { getBoot, post } from "../store.ts";
 import { ErrorBoundary } from "./error.tsx";
 import { Skeleton } from "./primitives.tsx";
 import type { SceneBuild, SceneHandle } from "./scene-impl.tsx";
@@ -15,6 +15,7 @@ const SceneImpl = React.lazy(() => import("./scene-impl.tsx"));
 const StepBar = React.lazy(() => import("./step-bar.tsx").then((m) => ({ default: m.StepBar })));
 
 export type { SceneBuild, SceneColors, SceneContext, ScenePoint } from "./scene-impl.tsx";
+export type { LabelOptions, LabelSide } from "../../shared/scene.ts";
 export type { SceneStep, SceneView };
 
 export type SceneProps = {
@@ -85,25 +86,53 @@ function SceneInner({ title, description, build, deps = [], view = "angle", step
     release.current = letGo;
     return letGo;
   }, []);
+  // artifact_check's scene and step: this scene, full size, at that step, scrolled to the top of the screen.
+  // In a check, whether this is that scene is settled before the scene is first drawn: it is drawn one way or the other.
+  const [shot, setShot] = React.useState<boolean | null>(getBoot()?.check === true ? null : false);
+  React.useLayoutEffect(() => {
+    const figure = outer.current?.matches('[data-speak="scene"]') ? outer.current : outer.current?.querySelector('[data-speak="scene"]');
+    const mine = getBoot()?.check === true && !!figure && claimShot(figure, title);
+    setShot(mine);
+    if (!mine) return;
+    const asked = checkShot()!.step;
+    if (asked !== null) {
+      if (!stepped) post({ t: "error", message: `artifact_check step: scene "${title}" has no steps; leave step out to see it` });
+      else if (asked > steps.length) post({ t: "error", message: `artifact_check step ${asked}: scene "${title}" has ${steps.length} steps` });
+      else setAt({ state: { at: asked - 1, all: false }, byKey: true });
+    }
+    const el = outer.current;
+    if (!el) return;
+    const show = () => el.scrollIntoView({ block: "start" });
+    show();
+    // Content above it that renders late (a chart, another scene) would push it down again.
+    const resized = new ResizeObserver(show);
+    resized.observe(document.body);
+    return () => resized.disconnect();
+  }, []);
   const settled = React.useCallback(() => release.current?.(), []);
 
   const figure = (
     <figure ref={stepped ? undefined : outer} data-key-stop={stepped ? undefined : ""} data-speak="scene" className={cn(stepped ? "m-0" : CARD, !stepped && className)}>
       <figcaption className="mb-3 px-1 text-sm font-medium">{title}</figcaption>
       <React.Suspense fallback={<Skeleton style={{ height }} />}>
-        <SceneImpl
-          title={title}
-          describedBy={about}
-          build={build}
-          deps={deps}
-          view={view}
-          height={height}
-          steps={stepped ? steps : undefined}
-          step={stepped ? Math.min(at.state.at, steps.length - 1) : 0}
-          stepByKey={at.byKey}
-          handle={handle}
-          onSettled={settled}
-        />
+        {shot === null ? (
+          <Skeleton style={{ height }} />
+        ) : (
+          <SceneImpl
+            title={title}
+            describedBy={about}
+            build={build}
+            deps={deps}
+            view={view}
+            height={height}
+            steps={stepped ? steps : undefined}
+            step={stepped ? Math.min(at.state.at, steps.length - 1) : 0}
+            stepByKey={at.byKey}
+            handle={handle}
+            onSettled={settled}
+            shot={shot}
+          />
+        )}
       </React.Suspense>
       <p id={about} data-scene-about="" className="mt-3 px-1 text-[13px] text-pretty text-muted-foreground">
         {description}

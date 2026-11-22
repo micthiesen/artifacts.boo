@@ -6,7 +6,7 @@ import { DurableObject } from "cloudflare:workers";
 import { PALETTE } from "../shared/who.ts";
 import { retireSignalBlobs } from "./restyle.ts";
 import { BUILD_STAMP, buildArtifact, type Build, type CompileError } from "./compile.ts";
-import { isDefaultView, renderCheck, type CheckEnv, type CheckOutcome, type CheckView, type RenderCheck } from "./check.ts";
+import { CHECK_LOGIC, isDefaultView, renderCheck, type CheckEnv, type CheckOutcome, type CheckView, type RenderCheck } from "./check.ts";
 import { domainOf, isValidPrincipal, sharePrincipal, WORKSPACE_PRINCIPAL } from "./principal.ts";
 import { applyJsonPatch, applyTextEdits, EditError, grepFiles, type JsonPatchOp, type TextEdit } from "./edit.ts";
 import { diffBlocks, type BlockInfo } from "./blocks.ts";
@@ -1654,7 +1654,7 @@ export class Workspace extends DurableObject {
     if (!force && stored && stored.version === version && stored.status === "done") {
       const previous = JSON.parse(stored.result as string) as RenderCheck;
       // Only definitive results are reused; a skipped check is retried.
-      if (previous.status === "ok" || previous.status === "errors") {
+      if ((previous.status === "ok" || previous.status === "errors") && (previous.logic ?? 1) >= CHECK_LOGIC) {
         return { check: previous, screenshot: stored.screenshot ? toB64(stored.screenshot as ArrayBuffer) : undefined, version };
       }
     }
