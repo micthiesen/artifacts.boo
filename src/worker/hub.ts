@@ -161,7 +161,7 @@ export type HubApi = AsyncMethods<
     | "setHostAllowed" | "sources" | "setSource" | "removeSource" | "refreshSources" | "shareSummaries" | "exportPage"
     | "importBegin" | "importRows" | "importEnd" | "backup" | "backups" | "restore" | "job" | "lastJobError" | "cancelJob" | "threads" | "addComment" | "endSessions" | "setFreeTeam"
     | "resolveThread" | "deleteComment" | "activity" | "visit" | "readers" | "previewInfo" | "previewImage" | "watches" | "setWatch"
-    | "joinDomains" | "setJoinDomains" | "setJoinDomain" | "autoJoin" | "eventsPoll" | "eventsSubscribe" | "eventsUnsubscribe" | "plan" | "setPlan" | "requestBackup" | "setPin" | "dismissSince" | "watchDefault" | "setWatchDefault" | "visibleCount" | "setFixCheckAt"
+    | "joinDomains" | "setJoinDomains" | "setJoinDomain" | "autoJoin" | "eventsPoll" | "eventsSubscribe" | "eventsUnsubscribe" | "plan" | "setPlan" | "requestBackup" | "setPin" | "dismissSince" | "watchDefault" | "setWatchDefault" | "visibleCount" | "setFixCheckAt" | "feedbackFacts"
   >
 > & { fetch(request: Request): Promise<Response> };
 
@@ -2981,6 +2981,29 @@ export class Workspace extends DurableObject {
   }
 
   // ---- link previews -----------------------------------------------------------
+
+  /**
+   * The facts an agent's feedback note records about an artifact, never its content: its version, the kind of its
+   * entry file, and its stored render check as one word for that version (null when none is stored).
+   */
+  feedbackFacts(id: string): { version: number; entry: string | null; check: string | null } | null {
+    const row = this.sql.exec(`SELECT version FROM artifacts WHERE id = ?`, id).toArray()[0];
+    if (!row) return null;
+    const entry = this.sql.exec(`SELECT path FROM files WHERE artifact_id = ? AND path IN ('index.mdx', 'index.md', 'app.tsx')`, id).toArray()[0]?.path as string | undefined;
+    const c = this.sql.exec(`SELECT version, status, result FROM checks WHERE artifact_id = ?`, id).toArray()[0];
+    let check: string | null = null;
+    if (c && c.version === row.version) {
+      if (c.status === "queued") check = "queued";
+      else if (c.result) {
+        try {
+          check = String((JSON.parse(c.result as string) as { status?: string }).status ?? "") || null;
+        } catch {
+          check = null;
+        }
+      }
+    }
+    return { version: row.version as number, entry: entry ? entry.slice(entry.lastIndexOf(".") + 1) : null, check };
+  }
 
   /** What a link-preview fetcher may see: title and screenshot only when the owner opted in or the artifact is public. */
   previewInfo(id: string): { rich: boolean; title: string; description: string; version: number; image: boolean } | null {

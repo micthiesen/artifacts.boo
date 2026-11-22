@@ -16,6 +16,7 @@ import { mountAccountMenu } from "./account.ts";
 import { createListen, listenSupported, type Listen } from "./listen.ts";
 import { initOwnerMenu } from "./owner-menu.ts";
 import { createDrawer } from "./threads.ts";
+import { conversationView, readReply } from "./conversation.ts";
 import { showSince } from "./since.ts";
 import { mountArchiveBar } from "./archive.ts";
 import { setPinned } from "./pins.ts";
@@ -162,12 +163,44 @@ function maybeInit() {
 // ---- comments ----------------------------------------------------------------------
 
 const canComment = boot.viewer.email !== null;
+/** A support case's page: the thread shown in the page (conversation.ts). */
+const conversationId = boot.conversation;
+/** Replies from the page on their way, by cid. */
+const conversationPending = new Set<string>();
 let lastThreads: Thread[] = [];
 let marksOn = true;
 
 function sendThreads(threads: Thread[]) {
   lastThreads = threads;
-  if (initSent) post({ t: "threads", threads: threads.map((t) => ({ id: t.id, anchor: t.anchor })), canComment });
+  // On a case's page everything is written in its conversation, so the page offers no new comments of its own.
+  if (initSent) post({ t: "threads", threads: threads.map((t) => ({ id: t.id, anchor: t.anchor })), canComment: canComment && !conversationId });
+  sendConversation();
+}
+
+/** A case's page: its conversation, to the page, and read once shown there. Nothing on any other page. */
+function sendConversation() {
+  if (!conversationId || !initSent) return;
+  const thread = drawer.thread(conversationId);
+  post({ t: "conversation", conversation: conversationView(thread, drawer.people(), boot.viewer.email, canComment) });
+  const last = thread?.comments.at(-1)?.seq;
+  if (last !== undefined && document.visibilityState === "visible") drawer.readUpTo(last);
+}
+
+// Comments that came in while the tab was hidden are read once it's in view again.
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") sendConversation();
+});
+
+function replyFromPage(msg: { cid?: unknown; text?: unknown }) {
+  const reply = readReply(conversationId, canComment, msg);
+  if (!reply) return;
+  if ("error" in reply) return post({ t: "conversation:result", cid: reply.cid, ok: false, reason: reply.error });
+  if (socket?.readyState !== WebSocket.OPEN) {
+    setStatus("Offline: reply not sent", "error");
+    return post({ t: "conversation:result", cid: reply.cid, ok: false, reason: "You're offline. Your reply is kept here; send it again when you're back." });
+  }
+  conversationPending.add(reply.cid);
+  socket.send(JSON.stringify({ t: "comment", cid: reply.cid, thread: conversationId, text: reply.text } satisfies SyncClientMessage));
 }
 
 const toggle = document.createElement("button");
@@ -273,6 +306,7 @@ const drawer = createDrawer(document.getElementById("threads")!, toggle, {
   focus: (thread) => post({ t: "focus", thread }),
   onThreads: sendThreads,
   onRead: (seq) => sendSync({ t: "read", seq }),
+  ...(conversationId ? { conversation: conversationId } : {}),
 });
 const pendingComments = new Set<string>();
 
@@ -356,6 +390,9 @@ window.addEventListener("message", (event) => {
       break;
     case "comment:new":
       drawer.compose(msg.anchor);
+      break;
+    case "conversation:reply":
+      replyFromPage(msg);
       break;
     case "comment:open":
       drawer.open(msg.thread);
@@ -446,6 +483,12 @@ function connect() {
         break;
       }
       case "rejected": {
+        if (conversationPending.delete(msg.cid)) {
+          // The page keeps the text in its box.
+          setStatus(`Reply not saved: ${msg.reason}`, "error");
+          post({ t: "conversation:result", cid: msg.cid, ok: false, reason: msg.reason });
+          break;
+        }
         if (pendingComments.delete(msg.cid)) {
           // A comment's text goes back into its box, so nothing typed is lost; a reaction comes off its chip.
           const what = drawer.failed(msg.cid);
@@ -480,6 +523,7 @@ function connect() {
         break;
       case "thread": {
         rememberColours(msg.colours);
+        const fromPage = msg.cid !== undefined && conversationPending.delete(msg.cid);
         const own = msg.cid !== undefined && pendingComments.delete(msg.cid);
         if (own) {
           drawer.sent(msg.cid!);
@@ -487,6 +531,12 @@ function connect() {
         }
         const before = drawer.count(msg.thread.id);
         drawer.upsert(msg.thread);
+        // After the page has the reply, so it lands where it was sent from (the page cues it there).
+        if (fromPage) {
+          clearError();
+          post({ t: "conversation:result", cid: msg.cid!, ok: true });
+          break;
+        }
         const last = msg.thread.comments.at(-1);
         if (!last || msg.thread.comments.length <= before) break;
         // A comment you sent lands in the drawer; one from someone else shows on it, or on the button when closed.
@@ -503,6 +553,9 @@ function connect() {
   });
   ws.addEventListener("close", (event) => {
     socket = null;
+    // Replies from the page that never heard back: the page keeps their text and can send again.
+    for (const cid of conversationPending) post({ t: "conversation:result", cid, ok: false, reason: "The connection dropped before this was saved. Send it again once you're back online." });
+    conversationPending.clear();
     if (event.code === 4003 || event.code === 4004) {
       setStatus(event.code === 4004 ? "This artifact was deleted." : "Your access changed. Reload the page.", "error");
       return;

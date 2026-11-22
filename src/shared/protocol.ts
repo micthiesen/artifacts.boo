@@ -41,7 +41,24 @@ export type FrameMessage =
    * A key command for the shell (src/shared/keys.ts): help, go to, the drawer, Listen. `yank` carries the
    * block's fragment (`arg`) or the selected text (`text`) to copy.
    */
-  | { t: "key"; cmd: Cmd; count?: number; arg?: string; text?: string };
+  | { t: "key"; cmd: Cmd; count?: number; arg?: string; text?: string }
+  /**
+   * A reply to the page's conversation (a support case's page only: ShellBoot.conversation). The shell sends it to
+   * that one thread as the viewer and answers conversation:result; anywhere else it is ignored.
+   */
+  | { t: "conversation:reply"; cid: string; text: string };
+
+/**
+ * A support case's conversation as its page shows it: the one thread the Worker named, with the names to show.
+ * Only the shell of a case's page sends it (ShellBoot.conversation); no other page's frame gets comments.
+ */
+export type ConversationView = {
+  comments: { id: string; by: string; name: string; text: string; at: string; reactions?: { emoji: string; by: string[] }[] }[];
+  /** The viewer may reply (signed in). */
+  canReply: boolean;
+  /** The viewer, for "You". */
+  me: string | null;
+};
 
 /** One block of the page as Listen reads it; `i` names the element in the frame, `h` the heading it sits under. */
 export type SpeakUnit = { i: number; text: string; h?: string };
@@ -97,7 +114,11 @@ export type ShellMessage =
   /** A page command pressed while the shell had focus (src/shared/keys.ts). */
   | { t: "key"; cmd: Cmd; count: number }
   /** Keys turned on or off in the account menu. */
-  | { t: "keys"; on: boolean };
+  | { t: "keys"; on: boolean }
+  /** A support case's page only: its conversation, whenever it changes. */
+  | { t: "conversation"; conversation: ConversationView }
+  /** What became of a conversation:reply: saved, or refused (offline, too long) with why, so the text can be kept. */
+  | { t: "conversation:result"; cid: string; ok: boolean; reason?: string };
 
 /** Shell <-> Worker sync WebSocket (one per open artifact tab). */
 export type SyncClientMessage =
@@ -246,6 +267,12 @@ export type ShellBoot = {
   scoped: boolean;
   /** Members' stored avatar colours (palette indexes, src/shared/who.ts) by email. */
   colours?: Record<string, number>;
+  /**
+   * A support case's page: its conversation's thread id. The shell shows that one thread inside the page as well as
+   * in the drawer, and relays the page's replies to it. Set by the Worker only on a case's own page in the support
+   * workspace, whose source the service writes; on every other page the frame gets no comments, as before.
+   */
+  conversation?: string;
 };
 
 export type WatchLevel = "all" | "participating" | "mute";

@@ -285,6 +285,9 @@ test("a status change with a reply sends the person one email, carrying both, wi
   expect(notified()).toBe(0);
   expect(toAna[0].text).toContain("Which phone and browser?");
   expect(toAna[0].text).toMatch(/Updated \d{4}-\d\d-\d\d \d\d:\d\d UTC \(\+00:00\)\./);
+  // The email's own words, not the page's status label.
+  expect(toAna[0].subject).toBe("A question for you: Table is blank on my phone");
+  expect(toAna[0].text).toStartWith("We have a question about your request #1.");
   // A reply with no status email still notifies them the usual way.
   await call("support", OP, "support_update", { case: 1, message: "Thanks, looking." });
   await support.deliverDue(Date.now() + 7_200_000);
@@ -336,6 +339,9 @@ test("\"fixed\" resolves the request; \"still a problem\" needs a note, reopens 
     { actor: ANA, event: "Still a problem: Still blank on my iPhone." },
     { actor: ANA, event: "Status: investigating" },
   ]);
+  // What they said is their message in the conversation, where it stays in view.
+  expect(support.threads(c.artifactId)[0].comments.at(-1)).toMatchObject({ by: ANA, text: "Still blank on my iPhone." });
+  expect(support.threads(c.artifactId)).toHaveLength(1);
   expect(h.directory.inbox(OP).items[0]).toMatchObject({ kind: "support", body: "Still blank on my iPhone.", url: `https://support.artifacts.test/a/${c.artifactId}` });
   expect(mail.filter((m) => m.to === OP && m.subject.includes("reopened"))).toHaveLength(1);
   // Their own answer isn't news to them.
@@ -403,4 +409,56 @@ test("the assistant can read an artifact the person linked, in their own workspa
   expect((await call("support", OP, "support_page", { case: 1, url: link })).text).toContain("can't open that page");
   // Only the operator, on the support workspace.
   expect(await tools("acme", ANA)).not.toContain("support_page");
+});
+
+test("the fix email says so in its own words, and its link signs the person in to that one page", async () => {
+  await report();
+  const c = h.directory.supportCase(1)!;
+  const sent: { to: string; subject: string; text: string }[] = [];
+  (env.EMAIL as { send: unknown }).send = async (m: { to: string; subject: string; text: string }) => void sent.push(m);
+  await call("support", OP, "support_update", { case: 1, status: "fix_deployed", fix: { summary: "Tables show as cards on phones." } });
+  const [fix] = sent.filter((m) => m.to === ANA);
+  expect(fix.subject).toBe("Fix released: Table is blank on my phone");
+  expect(fix.text).toStartWith("A fix is out for your request #1. Does it work for you now?");
+  const link = /Open your request: (\S+)/.exec(fix.text)![1];
+  expect(link).toMatch(/^https:\/\/support\.artifacts\.test\/s\/[A-Za-z0-9_.-]+$/);
+  // Opened in a browser with no session there (a phone's mail app): straight to the page, no sign-in code.
+  const res = await worker.fetch(new Request(link), env as never, ctx);
+  expect(res.status).toBe(303);
+  expect(res.headers.get("Location")).toBe(`/a/${c.artifactId}`);
+  expect(res.headers.get("Set-Cookie")).toContain("__Host-art_session=");
+  // The link is for that page only: the internal notes stay closed to it.
+  const cookie = res.headers.get("Set-Cookie")!.split(";")[0];
+  const notes = await worker.fetch(new Request(`https://support.artifacts.test/a/${c.notesId}`, { headers: { Cookie: cookie, Accept: "text/html" } }), env as never, ctx);
+  expect([302, 403]).toContain(notes.status);
+});
+
+test("only a case's own page gets its conversation in the page; its notes, other support pages and other workspaces don't", async () => {
+  await report();
+  const c = h.directory.supportCase(1)!;
+  const support = hubs.get("support") as InstanceType<typeof Workspace>;
+  const thread = (support.state(c.artifactId)["case/status"] as { thread: string }).thread;
+  const { signToken } = await import("../src/worker/session.ts");
+  const bootOf = async (host: string, id: string, email: string) => {
+    const cookie = `__Host-art_session=${await signToken(h.env.SESSION_SECRET, "session", 600, { e: email, h: host, iat: Math.floor(Date.now() / 1000) })}`;
+    const res = await worker.fetch(new Request(`https://${host}/a/${id}`, { headers: { Cookie: cookie, Accept: "text/html" } }), env as never, ctx);
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    return JSON.parse(/<script type="application\/json" id="shell-boot">([\s\S]*?)<\/script>/.exec(html)![1]) as { conversation?: string };
+  };
+  expect((await bootOf("support.artifacts.test", c.artifactId, ANA)).conversation).toBe(thread);
+  expect((await bootOf("support.artifacts.test", c.artifactId, OP)).conversation).toBe(thread);
+  // The case's internal notes are in the same workspace, and aren't a case's page.
+  expect((await bootOf("support.artifacts.test", c.notesId!, OP)).conversation).toBeUndefined();
+  // Nor is a page the operator makes there, even one with a thread and a case/status of its own.
+  const other = await support.create({ title: "Mine", files: { "index.mdx": "# Mine\n" }, owner: OP });
+  if (!other.ok) throw new Error("create failed");
+  const t = await support.addComment(other.id, OP, { text: "hello" }, "https://support.artifacts.test", undefined, "owner");
+  support.setState(other.id, { "case/status": { status: "new", thread: t.id } }, null);
+  expect((await bootOf("support.artifacts.test", other.id, OP)).conversation).toBeUndefined();
+  // A page in a person's own workspace, with comments: no conversation.
+  const page = await h.hub.create({ title: "Budget", files: { "index.mdx": "# Budget\n" }, owner: ANA });
+  if (!page.ok) throw new Error("create failed");
+  await h.hub.addComment(page.id, ANA, { text: "a comment" }, "https://acme.artifacts.test", undefined, "owner");
+  expect((await bootOf("acme.artifacts.test", page.id, ANA)).conversation).toBeUndefined();
 });

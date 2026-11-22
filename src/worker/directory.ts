@@ -93,6 +93,47 @@ export type SupportCase = {
 /** One line of a case's log. `actor` is an email, "agent" (the operator's assistant) or "system". */
 export type CaseEvent = { at: string; actor: string; event: string; status?: string };
 export type ErrorGroup = { fp: string; kind: string; place: string; message: string; count: number; firstAt: string; lastAt: string; versions: string[]; browsers: string[]; cases: number[] };
+export type NewFeedback = {
+  email: string;
+  workspace: string | null;
+  operator: boolean;
+  kind: string;
+  area: string;
+  impact: string;
+  summary: string;
+  expected: string;
+  happened: string;
+  workaround: string;
+  repro: string | null;
+  artifactId: string | null;
+  artifactVersion: number | null;
+  entry: string | null;
+  checkStatus: string | null;
+  appVersion: string;
+};
+/** A note as the triage session reads it: no address. */
+export type FeedbackItem = {
+  id: string;
+  kind: string;
+  area: string;
+  impact: string;
+  summary: string;
+  expected: string;
+  happened: string;
+  workaround: string;
+  repro: string | null;
+  workspace: string | null;
+  operator: boolean;
+  artifact: { id: string; version: number | null; entry: string | null; check: string | null } | null;
+  appVersion: string;
+  count: number;
+  createdAt: string;
+  lastAt: string;
+};
+/** What makes two summaries the same note: case, punctuation and spacing aside. */
+export function feedbackKey(summary: string): string {
+  return summary.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+}
 export type InboxItem = { id: number; at: string; kind: string; title: string; body: string | null; url: string | null; read: boolean };
 
 function toCase(r: Record<string, SqlStorageValue>): SupportCase {
@@ -126,7 +167,7 @@ type AsyncMethods<T> = {
 export type DirectoryApi = AsyncMethods<
   Pick<
     Directory,
-    | "createWorkspace" | "createOwnWorkspace" | "canMakeWorkspace" | "selfServeFullToday" | "setCreator" | "allowReport" | "forgetPerson" | "forgetTestPeople" | "recordOps" | "opsEvents" | "billingAll" | "allowCase" | "addCase" | "updateCase" | "supportCase" | "supportCaseByArtifact" | "supportCases" | "supportStats" | "addDraft" | "draft" | "approveDraft" | "attachCase" | "dropCase" | "recordErrorGroup" | "errorGroups" | "addInbox" | "addInboxMany" | "forgetInbox" | "inbox" | "unreadCount" | "markInboxRead" | "markInboxReadFor" | "openInbox" | "billing" | "applyBilling" | "billingPlan" | "endBilling" | "slugForSubscription" | "workspace" | "workspaces" | "setSuspended" | "removeWorkspace" | "recordStats" | "setMembership"
+    | "createWorkspace" | "createOwnWorkspace" | "canMakeWorkspace" | "selfServeFullToday" | "setCreator" | "allowReport" | "forgetPerson" | "forgetTestPeople" | "recordOps" | "opsEvents" | "billingAll" | "allowCase" | "addCase" | "updateCase" | "supportCase" | "supportCaseByArtifact" | "supportCases" | "supportStats" | "addDraft" | "draft" | "approveDraft" | "attachCase" | "dropCase" | "recordErrorGroup" | "errorGroups" | "addFeedback" | "feedbackCounts" | "feedbackItems" | "closeFeedback" | "addInbox" | "addInboxMany" | "forgetInbox" | "inbox" | "unreadCount" | "markInboxRead" | "markInboxReadFor" | "openInbox" | "billing" | "applyBilling" | "billingPlan" | "endBilling" | "slugForSubscription" | "workspace" | "workspaces" | "setSuspended" | "removeWorkspace" | "recordStats" | "setMembership"
     | "replaceMemberships" | "membershipsOf" | "names" | "profile" | "setName" | "addChannel" | "removeChannel" | "channelConfig" | "channelsFor"
     | "recordChannelResult" | "recordChannelResults" | "startLogin" | "verifyLogin" | "hasSignedIn" | "recordContact" | "recordVisit" | "allowChannelTest" | "signInDiagnostics" | "setEmailNotifications" | "recordJob" | "publish" | "exportPage" | "importBegin" | "importRows" | "importEnd"
     | "backup" | "backups" | "restore" | "passkeys" | "passkey" | "addPasskey" | "removePasskey" | "usePasskey"
@@ -165,6 +206,13 @@ const INBOX_DAYS = 90;
 const inboxSince = () => new Date(Date.now() - INBOX_DAYS * 86_400_000).toISOString();
 /** Error groups kept. */
 const ERROR_GROUPS_KEEP = 500;
+/** Agent feedback: notes a day from one person, one workspace and everyone; open notes at most; days a repeat merges and rows last. */
+const FEEDBACK_PER_PERSON_DAY = 3;
+const FEEDBACK_PER_WORKSPACE_DAY = 10;
+const FEEDBACK_PER_DAY = 100;
+const FEEDBACK_OPEN_MAX = 500;
+const FEEDBACK_REPEAT_DAYS = 7;
+const FEEDBACK_KEEP_DAYS = 90;
 /** Ops events kept for the operator console. */
 const OPS_KEEP = 500;
 /** Deleting one and making another is fine now and then, not on a loop. */
@@ -327,6 +375,21 @@ const MIGRATIONS: Migration[] = [
       ALTER TABLE support_cases ADD COLUMN events TEXT;
       ALTER TABLE support_cases ADD COLUMN status_at TEXT;
       UPDATE support_cases SET status_at = updated_at;
+    `),
+  // Agents' notes about the tools themselves (agent_feedback), apart from support cases: nobody waits on one. Closing
+  // a note deletes its free text; the rest stays a while for counts.
+  (sql) =>
+    sql.exec(`
+      CREATE TABLE agent_feedback (
+        id TEXT PRIMARY KEY, email TEXT NOT NULL, workspace TEXT, operator INTEGER NOT NULL DEFAULT 0,
+        kind TEXT NOT NULL, area TEXT NOT NULL, impact TEXT NOT NULL,
+        summary TEXT, summary_key TEXT, expected TEXT, happened TEXT, workaround TEXT, repro TEXT,
+        artifact_id TEXT, artifact_version INTEGER, entry TEXT, check_status TEXT,
+        app_version TEXT NOT NULL, count INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, last_at TEXT NOT NULL,
+        closed_at TEXT, outcome TEXT, fix_version TEXT, fix_commit TEXT);
+      CREATE INDEX agent_feedback_by_email ON agent_feedback (email, created_at);
+      CREATE INDEX agent_feedback_by_workspace ON agent_feedback (workspace, created_at);
+      CREATE INDEX agent_feedback_by_created ON agent_feedback (created_at);
     `),
 ];
 
@@ -793,6 +856,137 @@ export class Directory extends DurableObject {
     }));
   }
 
+  // ---- agent feedback ----------------------------------------------------------------
+
+  /**
+   * One note from an agent (agent_feedback). The same person sending the same kind, area and summary again within
+   * FEEDBACK_REPEAT_DAYS adds to its count; otherwise it counts against the person's, the workspace's and everyone's
+   * day, and the open queue's cap.
+   */
+  addFeedback(n: NewFeedback): { result: "added" | "repeat" | "limit" | "full"; id?: string } {
+    this.pruneFeedback();
+    const now = new Date().toISOString();
+    const key = feedbackKey(n.summary);
+    const since = new Date(Date.now() - FEEDBACK_REPEAT_DAYS * 86_400_000).toISOString();
+    // A summary with no words in it matches nothing.
+    const same = key && this.sql
+      .exec(`SELECT id FROM agent_feedback WHERE email = ? AND kind = ? AND area = ? AND summary_key = ? AND closed_at IS NULL AND created_at > ?`, n.email, n.kind, n.area, key, since)
+      .toArray()[0];
+    if (same) {
+      this.sql.exec(`UPDATE agent_feedback SET count = count + 1, last_at = ? WHERE id = ?`, now, same.id);
+      return { result: "repeat", id: same.id as string };
+    }
+    const day = new Date(Date.now() - 86_400_000).toISOString();
+    const count = (where: string, ...args: SqlStorageValue[]) => this.sql.exec(`SELECT COUNT(*) AS n FROM agent_feedback WHERE created_at > ? ${where}`, day, ...args).one().n as number;
+    if (count("AND email = ?", n.email) >= FEEDBACK_PER_PERSON_DAY) return { result: "limit" };
+    if (n.workspace && count("AND workspace = ?", n.workspace) >= FEEDBACK_PER_WORKSPACE_DAY) return { result: "limit" };
+    if (count("") >= FEEDBACK_PER_DAY) return { result: "limit" };
+    if ((this.sql.exec(`SELECT COUNT(*) AS n FROM agent_feedback WHERE closed_at IS NULL`).one().n as number) >= FEEDBACK_OPEN_MAX) return { result: "full" };
+    const id = `f_${randomId(6)}`;
+    this.sql.exec(
+      `INSERT INTO agent_feedback (id, email, workspace, operator, kind, area, impact, summary, summary_key, expected, happened, workaround, repro,
+         artifact_id, artifact_version, entry, check_status, app_version, count, created_at, last_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
+      id, n.email, n.workspace, n.operator ? 1 : 0, n.kind, n.area, n.impact, n.summary, key, n.expected, n.happened, n.workaround, n.repro,
+      n.artifactId, n.artifactVersion, n.entry, n.checkStatus, n.appVersion, now, now,
+    );
+    return { result: "added", id };
+  }
+
+  /**
+   * The queue as counts only (no note text): open notes and those new since `since`, by area, kind and impact, each
+   * as notes, distinct people and distinct workspaces, so one account can't make a problem look common.
+   */
+  feedbackCounts(since: string) {
+    this.pruneFeedback();
+    const open = this.sql.exec(`SELECT email, workspace, operator, kind, area, impact, created_at, count FROM agent_feedback WHERE closed_at IS NULL`).toArray();
+    const group = (rows: typeof open, by: "area" | "kind" | "impact") => {
+      const out: Record<string, { notes: number; people: number; workspaces: number }> = {};
+      const sets = new Map<string, { p: Set<unknown>; w: Set<unknown> }>();
+      for (const r of rows) {
+        const k = r[by] as string;
+        const g = (out[k] ??= { notes: 0, people: 0, workspaces: 0 });
+        const s = sets.get(k) ?? { p: new Set(), w: new Set() };
+        sets.set(k, s);
+        g.notes++;
+        s.p.add(r.email);
+        if (r.workspace) s.w.add(r.workspace);
+        g.people = s.p.size;
+        g.workspaces = s.w.size;
+      }
+      return out;
+    };
+    const fresh = open.filter((r) => (r.created_at as string) > since);
+    const closed = this.sql.exec(`SELECT outcome, COUNT(*) AS n FROM agent_feedback WHERE closed_at > ? GROUP BY outcome`, since).toArray();
+    return {
+      open: open.length,
+      openPeople: new Set(open.map((r) => r.email)).size,
+      openWorkspaces: new Set(open.map((r) => r.workspace).filter(Boolean)).size,
+      fromOperators: open.filter((r) => r.operator).length,
+      blocked: open.filter((r) => r.impact === "blocked").length,
+      oldestOpenAt: open.map((r) => r.created_at as string).sort()[0] ?? null,
+      since,
+      new: fresh.length,
+      byArea: group(open, "area"),
+      byKind: group(open, "kind"),
+      byImpact: group(open, "impact"),
+      newByArea: group(fresh, "area"),
+      closedSince: Object.fromEntries(closed.map((r) => [r.outcome as string, r.n as number])),
+    };
+  }
+
+  /** Open notes with their text, oldest first: only for the session that triages them, never shown to an agent that files one. */
+  feedbackItems(filter: { area?: string; kind?: string; limit?: number } = {}): FeedbackItem[] {
+    this.pruneFeedback();
+    const where = ["closed_at IS NULL"];
+    const args: SqlStorageValue[] = [];
+    if (filter.area) where.push("area = ?"), args.push(filter.area);
+    if (filter.kind) where.push("kind = ?"), args.push(filter.kind);
+    return this.sql
+      .exec(`SELECT * FROM agent_feedback WHERE ${where.join(" AND ")} ORDER BY created_at LIMIT ?`, ...args, Math.max(1, Math.min(filter.limit ?? 100, FEEDBACK_OPEN_MAX)))
+      .toArray()
+      .map((r) => ({
+        id: r.id as string,
+        kind: r.kind as string,
+        area: r.area as string,
+        impact: r.impact as string,
+        summary: (r.summary as string | null) ?? "",
+        expected: (r.expected as string | null) ?? "",
+        happened: (r.happened as string | null) ?? "",
+        workaround: (r.workaround as string | null) ?? "",
+        repro: (r.repro as string | null) ?? null,
+        workspace: (r.workspace as string | null) ?? null,
+        operator: Boolean(r.operator),
+        artifact: r.artifact_id ? { id: r.artifact_id as string, version: (r.artifact_version as number | null) ?? null, entry: (r.entry as string | null) ?? null, check: (r.check_status as string | null) ?? null } : null,
+        appVersion: r.app_version as string,
+        count: r.count as number,
+        createdAt: r.created_at as string,
+        lastAt: r.last_at as string,
+      }));
+  }
+
+  /** Closes notes with what came of them, deleting their text at once. Returns the ids that were open. */
+  closeFeedback(ids: string[], outcome: string, fix: { version?: string; commit?: string } = {}): string[] {
+    const now = new Date().toISOString();
+    const closed: string[] = [];
+    for (const id of new Set(ids)) {
+      const r = this.sql.exec(`SELECT id FROM agent_feedback WHERE id = ? AND closed_at IS NULL`, id).toArray()[0];
+      if (!r) continue;
+      this.sql.exec(
+        `UPDATE agent_feedback SET closed_at = ?, outcome = ?, fix_version = ?, fix_commit = ?,
+           summary = NULL, summary_key = NULL, expected = NULL, happened = NULL, workaround = NULL, repro = NULL WHERE id = ?`,
+        now, outcome, fix.version ?? null, fix.commit ?? null, id,
+      );
+      closed.push(id);
+    }
+    return closed;
+  }
+
+  /** Closed notes' rows go after FEEDBACK_KEEP_DAYS; open ones nobody got to by then are dropped. */
+  private pruneFeedback() {
+    this.sql.exec(`DELETE FROM agent_feedback WHERE created_at < ?`, new Date(Date.now() - FEEDBACK_KEEP_DAYS * 86_400_000).toISOString());
+  }
+
   // ---- inbox (the Notification Centre) ----------------------------------------------
 
   /** Something that needs this person: kept (the latest INBOX_KEEP) until they've seen it; `dedupe` makes it once only. */
@@ -937,7 +1131,7 @@ export class Directory extends DurableObject {
    */
   forgetPerson(email: string) {
     this.ctx.storage.transactionSync(() => {
-      for (const table of ["users", "channels", "login_codes", "login_sends", "login_fails", "visits", "channel_tests", "passkeys", "memberships", "inbox", "contacted"]) {
+      for (const table of ["users", "channels", "login_codes", "login_sends", "login_fails", "visits", "channel_tests", "passkeys", "memberships", "inbox", "contacted", "agent_feedback"]) {
         this.sql.exec(`DELETE FROM ${table} WHERE email = ?`, email);
       }
     });
@@ -950,7 +1144,7 @@ export class Directory extends DurableObject {
    */
   forgetTestPeople(): string[] {
     const emails = new Set<string>();
-    for (const table of ["users", "visits", "login_sends", "login_fails", "login_codes", "channels", "passkeys", "inbox", "contacted"]) {
+    for (const table of ["users", "visits", "login_sends", "login_fails", "login_codes", "channels", "passkeys", "inbox", "contacted", "agent_feedback"]) {
       for (const r of this.sql.exec(`SELECT DISTINCT email FROM ${table}`)) emails.add(r.email as string);
     }
     const members = new Set(this.sql.exec(`SELECT DISTINCT email FROM memberships`).toArray().map((r) => r.email as string));
@@ -969,6 +1163,8 @@ export class Directory extends DurableObject {
       // Its notifications (they quote its comments), including ones from before inbox rows named their workspace.
       this.sql.exec(`DELETE FROM inbox WHERE slug = ? OR (slug IS NULL AND url LIKE 'https://' || ? || '.%')`, slug, slug);
       this.sql.exec(`UPDATE support_cases SET workspace = NULL WHERE workspace = ?`, slug);
+      // Its agents' notes: written from inside it, so they go with it.
+      this.sql.exec(`DELETE FROM agent_feedback WHERE workspace = ?`, slug);
       // The operator's log about it, except payments (kept as the record of what was charged).
       this.sql.exec(`DELETE FROM ops_events WHERE slug = ? AND kind NOT LIKE 'billing%'`, slug);
     });

@@ -39,7 +39,7 @@ import {
 import { prepareChannel, sendToChannel, type ChannelType } from "./notify.ts";
 import { isTestAddress, sendCode, sendInvite } from "./mail.ts";
 import { ops } from "./ops.ts";
-import { approveAnnouncement, browserOf, caseUrl, openCase, placeOf, recordProductError, supportHub, SupportError, type CaseKind } from "./support.ts";
+import { approveAnnouncement, browserOf, caseUrl, openCase, placeOf, recordProductError, SUPPORT_SLUG, supportHub, SupportError, type CaseKind } from "./support.ts";
 import { publicMessage } from "./errors.ts";
 import { isPlan } from "./plans.ts";
 import { BillingError, billingOn, billingReady, planFor, portalLink, readEvent, startCheckout, subscriptionLive, subscriptionMayCharge, TEAM_PRICE, verifyWebhook } from "./billing.ts";
@@ -694,6 +694,7 @@ async function workspaceRoute(request: Request, env: Env): Promise<Response> {
     const { meta, visit, member, backlinks, linkTitles, colours } = opened as Extract<typeof opened, { meta: unknown }>;
     if (here.email && colours[here.email] !== undefined) brand.colour = colours[here.email];
     const token = await signToken(env.SESSION_SECRET, "frame", FRAME_TTL, { id, e: here.email, w: slug });
+    const conversation = slug === SUPPORT_SLUG ? await caseConversation(env, hub, id) : undefined;
     return shellPage(
       {
         artifactId: id,
@@ -710,6 +711,7 @@ async function workspaceRoute(request: Request, env: Env): Promise<Response> {
         scoped,
         colours,
         ...(meta.archivedAt ? { archivedAt: meta.archivedAt } : {}),
+        ...(conversation ? { conversation } : {}),
         ...(visit ? { since: visit.since, readSeq: visit.readSeq, watch: visit.watch, ...(scoped ? {} : { pinned: visit.pinned }) } : {}),
       },
       brand,
@@ -719,6 +721,17 @@ async function workspaceRoute(request: Request, env: Env): Promise<Response> {
   }
 
   return messagePage("Not found", "There's nothing here.", 404, undefined, brand);
+}
+
+/**
+ * The thread a support case's page shows as its conversation, inside the page. Only a case's own page (its source
+ * is the service's, and the person who sent it can't edit files) gets one; the case's internal notes and anything
+ * else in the support workspace don't, and no other workspace is asked.
+ */
+async function caseConversation(env: Env, hub: HubApi, id: string): Promise<string | undefined> {
+  if (!(await directory(env).supportCaseByArtifact(id))) return undefined;
+  const status = (await hub.state(id))["case/status"] as { thread?: unknown } | undefined;
+  return typeof status?.thread === "string" ? status.thread : undefined;
 }
 
 /**
@@ -1944,6 +1957,7 @@ async function accountApi(request: Request, url: URL, env: Env, viewer: Viewer):
  * - POST   /api/admin/workspaces/<slug>/end-billing      end its paid time now (refund, dispute), so it's Free
  * - POST   /api/admin/workspaces/<slug>/hosts {host, allowed}   approve or revoke a live-data host, as its admins can
  * - POST   /api/admin/workspaces/<slug>/tokens {email}   an agent token for a member
+ * - DELETE /api/admin/workspaces/<slug>/tokens {id, email}   revoke one
  * - POST   /api/admin/session {email, host}              a session cookie value for the apex or a workspace host
  * The last two exist for end-to-end checks and only accept test addresses
  * (example.com/.org/.net, .test, .invalid), so they can't act as a real person.
@@ -2056,7 +2070,7 @@ async function operatorApi(request: Request, url: URL, env: Env, viewer: Viewer,
       return Response.json({ deleted: slug });
     }
     if (!listed) return Response.json({ error: `no workspace ${slug}` }, { status: 404 });
-    const body = request.method === "POST" ? await jsonBody(request) : {};
+    const body = request.method === "POST" || (request.method === "DELETE" && action === "tokens") ? await jsonBody(request) : {};
     if (!action && request.method === "POST") {
       if (typeof body.suspended === "boolean") {
         await dir.setSuspended(slug, body.suspended);
@@ -2128,6 +2142,12 @@ async function operatorApi(request: Request, url: URL, env: Env, viewer: Viewer,
       const label = typeof body.label === "string" && body.label.trim() ? body.label.trim().slice(0, 60) : "End-to-end check";
       if (!isTestAddress(email) && !operatorEmails(env).has(email)) return Response.json({ error: "only test addresses or operators" }, { status: 400 });
       return Response.json(await hub.createToken(email, label));
+    }
+    // ...and revoking one made that way, so a check cleans up after itself.
+    if (action === "tokens" && request.method === "DELETE") {
+      const email = String(body.email ?? "").toLowerCase();
+      if (!isTestAddress(email) && !operatorEmails(env).has(email)) return Response.json({ error: "only test addresses or operators" }, { status: 400 });
+      return Response.json({ revoked: await hub.revokeToken(String(body.id ?? ""), email) });
     }
   } catch (err) {
     return await failure(err, env, request);

@@ -16,6 +16,7 @@ import type { JsonValue } from "../shared/protocol.ts";
 import { sendOperatorNote, sendSupportUpdate } from "./mail.ts";
 import { ops } from "./ops.ts";
 import { APP_VERSION } from "./pages.ts";
+import { signToken } from "./session.ts";
 
 export type SupportEnv = {
   DIRECTORY: DurableObjectNamespace;
@@ -25,6 +26,8 @@ export type SupportEnv = {
   OPERATOR_EMAILS?: string;
   EMAIL?: SendEmail;
   MAIL_FROM: string;
+  /** Signs the links in support emails (as artifact_link's are). */
+  LOGIN_SECRET?: string;
   /** Days a released fix waits for the person's answer before the request resolves by itself (default 7). */
   SUPPORT_AUTO_RESOLVE_DAYS?: string;
 };
@@ -35,14 +38,19 @@ export type CaseKind = (typeof CASE_KINDS)[number];
 export const CASE_STATUSES = ["new", "triaged", "investigating", "needs_info", "fix_proposed", "fix_deployed", "resolved", "wont_fix", "duplicate"] as const;
 export type CaseStatus = (typeof CASE_STATUSES)[number];
 const KIND_LABEL: Record<CaseKind, string> = { bug: "problem", feature: "idea", question: "question" };
-/** Status changes the person hears about (others show on the page only). */
-const TELL: Partial<Record<CaseStatus, string>> = {
-  needs_info: "We need a little more from you",
-  fix_deployed: "A fix is out: does it work for you?",
-  resolved: "Resolved",
-  wont_fix: "Closed",
-  duplicate: "Being handled with another report",
+/**
+ * Status changes the person hears about (others show on the page only), in the email's own words: a short label
+ * that leads the subject and the inbox item, and the email's first line.
+ */
+const TELL: Partial<Record<CaseStatus, { label: string; line: (n: number) => string }>> = {
+  needs_info: { label: "A question for you", line: (n) => `We have a question about your request #${n}.` },
+  fix_deployed: { label: "Fix released", line: (n) => `A fix is out for your request #${n}. Does it work for you now?` },
+  resolved: { label: "Resolved", line: (n) => `Your request #${n} is resolved.` },
+  wont_fix: { label: "Closed", line: (n) => `We've closed your request #${n} without a change.` },
+  duplicate: { label: "Merged with another report", line: (n) => `Your request #${n} is now handled together with another report of the same thing.` },
 };
+/** The sign-in link in a support email works this much longer than a released fix waits for an answer. */
+const EMAIL_LINK_SPARE_DAYS = 7;
 const TITLE_MAX = 120;
 const DETAILS_MAX = 5000;
 const PLAN_MAX = 10_000;
@@ -79,6 +87,17 @@ export function operators(env: Pick<SupportEnv, "OPERATOR_EMAILS">): string[] {
 }
 export const isOperator = (env: Pick<SupportEnv, "OPERATOR_EMAILS">, email: string | null) => Boolean(email && operators(env).includes(email.toLowerCase()));
 export const caseUrl = (env: SupportEnv, c: Pick<SupportCase, "artifactId">) => `${supportOrigin(env)}/a/${c.artifactId}`;
+
+/**
+ * The link in an email to the person who sent a request: it signs them in to that one page, so answering
+ * "Did this fix it?" from a phone's mail app needs no sign-in code. Session cookies are per host, and a mail
+ * app's browser usually has none for the support workspace. The email goes only to them, as a share's does.
+ */
+async function emailLink(env: SupportEnv, c: Pick<SupportCase, "artifactId" | "reporter">): Promise<string> {
+  if (!env.LOGIN_SECRET) return caseUrl(env, c);
+  const code = await signToken(env.LOGIN_SECRET, "link", (autoResolveDays(env) + EMAIL_LINK_SPARE_DAYS) * 86_400, { e: c.reporter.toLowerCase(), a: c.artifactId, w: SUPPORT_SLUG });
+  return `${supportOrigin(env)}/s/${code}`;
+}
 
 export class SupportError extends Error {}
 
@@ -197,7 +216,7 @@ export async function openCase(env: SupportEnv, input: NewCase): Promise<{ numbe
     await sendSupportUpdate(env, reporter, {
       subject: `We got your ${KIND_LABEL[input.kind]}: ${title}`,
       lines: [`Thanks. Your request #${n} is with us.`, "Replies, questions and fixes show up on its page, and we'll let you know when something changes."],
-      url,
+      url: await emailLink(env, { artifactId: id, reporter }),
     });
     await ops(env, { kind: "support_case", slug: SUPPORT_SLUG, message: `#${n} ${input.kind} from ${reporter}${input.viaAgent ? " (via agent)" : ""}: "${title}"`, detail: { case: n, artifactId: id } });
   } catch (err) {
@@ -296,17 +315,17 @@ export async function updateCase(env: SupportEnv, u: CaseUpdate, hub: HubApi = h
   if (tell) {
     const url = caseUrl(env, before);
     // Once per change (the same status later, after something else, is a new change).
-    const fresh = await d.addInbox(before.reporter, { kind: "support", title: `${tell} (#${u.n})`, body: before.title, url, dedupe: `case:${u.n}:${status}:${history.length}`, slug: SUPPORT_SLUG, artifact: before.artifactId });
+    const fresh = await d.addInbox(before.reporter, { kind: "support", title: `${tell.label} (#${u.n})`, body: before.title, url, dedupe: `case:${u.n}:${status}:${history.length}`, slug: SUPPORT_SLUG, artifact: before.artifactId });
     if (fresh) {
       const lines = [
-        `Your request #${u.n}: ${tell.toLowerCase()}${/[?.!]$/.test(tell) ? "" : "."}`,
+        tell.line(u.n),
         ...(message ? [message] : []),
         ...(status === "fix_deployed"
           ? [`If we don't hear from you by ${utcStamp(Date.parse(now) + autoResolveDays(env) * 86_400_000)}, we'll mark it resolved. You can still reply after that and we'll pick it up again.`]
           : []),
         `Updated ${utcStamp(now)}.`,
       ];
-      emailed = await sendSupportUpdate(env, before.reporter, { subject: `${tell}: ${before.title}`, lines, url }).then(
+      emailed = await sendSupportUpdate(env, before.reporter, { subject: `${tell.label}: ${before.title}`, lines, url: await emailLink(env, before) }).then(
         () => true,
         (err) => (console.error("support email failed", err), false),
       );
@@ -366,6 +385,14 @@ export async function fixAnswered(env: SupportEnv, hub: HubApi, artifactId: stri
   const after = await updateCase(env, { n: c.n, status: "investigating", actor: c.reporter, event: `Still a problem: ${note}` }, hub);
   const url = caseUrl(env, c);
   try {
+    // What they said is the most important thing in the request: it goes into the conversation as their message,
+    // where it stays in view (the question that asked for it leaves the page once the request reopens).
+    const thread = ((await hub.state(c.artifactId))["case/status"] as { thread?: string } | undefined)?.thread;
+    if (note) await hub.addComment(c.artifactId, c.reporter, { ...(thread ? { thread } : {}), text: note.slice(0, DETAILS_MAX) }, supportOrigin(env), undefined, "edit");
+  } catch (err) {
+    console.error("adding a reopened request's note to its conversation failed", c.n, err);
+  }
+  try {
     for (const op of operators(env)) {
       await d.addInbox(op, { kind: "support", title: `Reopened: the fix didn't work (#${c.n})`, body: note, url, dedupe: `case:${c.n}:reopened:${after.statusAt}`, slug: SUPPORT_SLUG, artifact: c.artifactId });
     }
@@ -402,7 +429,7 @@ export async function resolveUnanswered(env: SupportEnv, hub: HubApi = hubOf(env
           status: "resolved",
           actor: "system",
           event: `No answer in ${days} ${days === 1 ? "day" : "days"}: resolved automatically`,
-          message: `We haven't heard back in ${days} ${days === 1 ? "day" : "days"}, so we've marked this resolved. If it's still a problem, say so here or with "No, still a problem" on this page, and we'll pick it up again.`,
+          message: `We haven't heard back in ${days} ${days === 1 ? "day" : "days"}, so we've marked this resolved. If it's still a problem, say so here and we'll pick it up again.`,
         },
         hub,
       );

@@ -386,7 +386,6 @@ function ReactMenu({ of, me, onToggle, className }: { of: Reacted; me: string | 
 export function Comments({ id = "main", title = "Comments", className }: { id?: string; title?: React.ReactNode; className?: string }) {
   const map = useSharedMap<Comment>(`comments/${id}`);
   const viewer = useViewer();
-  const now = useNow();
   const [text, setText] = React.useState("");
   const list = map.entries.filter(([, c]) => c && typeof c.text === "string");
   const root = React.useRef<HTMLElement>(null);
@@ -445,60 +444,166 @@ export function Comments({ id = "main", title = "Comments", className }: { id?: 
       {list.length === 0 && <p className="mb-4 text-sm text-muted-foreground">No comments yet.</p>}
       <ul className="flex flex-col gap-5">
         {list.map(([key, c]) => (
-          // On a phone the comment runs under the avatar at full width; only the name line sits beside it.
-          <li key={key} data-key={key} className="group grid grid-cols-[auto_minmax(0,1fr)] gap-x-3">
-            <Avatar email={c.by} />
-            <div className="min-w-0 max-sm:contents">
-              {/* As tall as the avatar, so the name line centers on it and the comment starts below it. */}
-              <div className="flex flex-wrap items-baseline gap-x-2 text-sm leading-8">
-                <span className="font-semibold">{displayName(c.by)}</span>
-                <span className="text-[13px] text-muted-foreground" title={new Date(c.at).toLocaleString()}>
-                  {relativeTime(c.at, now)}
-                </span>
-                {viewer.canWrite && c.by === viewer.email && (
-                  <button
-                    type="button"
-                    aria-label="Delete comment"
-                    onClick={() => confirm("Delete this comment?") && map.delete(key)}
-                    className="relative ml-auto cursor-pointer self-center rounded p-1 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 after:absolute after:-inset-1 after:content-[''] hover:text-negative focus-visible:opacity-100 pointer-coarse:opacity-70"
-                  >
-                    <Trash2 className="size-3.5" />
-                  </button>
-                )}
-                {viewer.canWrite && <ReactMenu of={reacted.get(key) ?? NO_REACTIONS} me={viewer.email} onToggle={(emoji) => react(key, emoji)} className={cn("self-center", c.by === viewer.email ? "ml-1" : "ml-auto")} />}
-              </div>
-              <p className="-mt-1 text-[15px] leading-relaxed break-words whitespace-pre-wrap max-sm:col-span-2 max-sm:mt-1">{c.text}</p>
-              <ReactionChips commentKey={key} of={reacted.get(key) ?? NO_REACTIONS} me={viewer.email} onToggle={viewer.canWrite ? (emoji) => react(key, emoji) : undefined} />
-            </div>
-          </li>
+          <CommentRow
+            key={key}
+            rowKey={key}
+            by={c.by}
+            name={displayName(c.by)}
+            at={c.at}
+            text={c.text}
+            me={viewer.email}
+            reactions={reacted.get(key) ?? NO_REACTIONS}
+            onDelete={viewer.canWrite && c.by === viewer.email ? () => confirm("Delete this comment?") && map.delete(key) : undefined}
+            onReact={viewer.canWrite ? (emoji) => react(key, emoji) : undefined}
+          />
         ))}
       </ul>
       {viewer.canWrite ? (
-        <form onSubmit={submit} className="mt-5 flex gap-3">
-          <Avatar email={viewer.email} />
-          <div className="flex-1">
-            <Textarea
-              value={text}
-              onChange={(e) => setText(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) submit(e);
-              }}
-              placeholder="Add a comment…"
-              rows={2}
-              className="min-h-16"
-            />
-            <div className="mt-2 flex items-center justify-end gap-3">
-              <span className="text-xs text-muted-foreground pointer-coarse:hidden">⌘/Ctrl + Enter</span>
-              <Button type="button" onClick={submit} size="sm" disabled={!text.trim()}>
-                <Send /> Comment
-              </Button>
-            </div>
-          </div>
-        </form>
+        <CommentComposer me={viewer.email} value={text} onChange={setText} onSubmit={submit} className="mt-5" />
       ) : (
         <ReadOnlyNote email={viewer.email} />
       )}
     </section>
+  );
+}
+
+/** The agent, in a list of people: the logo, moon white, as tall as a person's ghost. */
+function AgentAvatar() {
+  return (
+    <span title="Support" className="inline-flex size-8 shrink-0 items-center justify-center">
+      <svg viewBox="5 2 90 93" className="size-7" aria-hidden="true">
+        <path fill="#f6f2ea" d="M50 4C70 4 84 20 85 44C86 58 92 66 93 76C94 87 88 92 81 92C76 92 73 87 67 87C61 87 58 93 50 93C42 93 39 87 33 87C27 87 24 92 19 92C12 92 6 87 7 76C8 66 14 58 15 44C16 20 30 4 50 4Z" />
+        <path d="M32.40 48.70Q38.0 40.60 43.60 48.70" fill="none" stroke="#161b24" strokeWidth="5.2" strokeLinecap="round" />
+        <path d="M56.40 48.70Q62.0 40.60 67.60 48.70" fill="none" stroke="#161b24" strokeWidth="5.2" strokeLinecap="round" />
+        <ellipse cx="32.20" cy="56.00" rx="4.6" ry="2.8" fill="#ff7ab0" fillOpacity="0.6" />
+        <ellipse cx="67.80" cy="56.00" rx="4.6" ry="2.8" fill="#ff7ab0" fillOpacity="0.6" />
+      </svg>
+    </span>
+  );
+}
+
+/**
+ * One comment as the kit draws it, for the Comments block and a support case's conversation. `by` "agent" is the
+ * operator's assistant, drawn as the logo. Delete and React show only when they're given.
+ */
+export function CommentRow({
+  rowKey,
+  by,
+  name,
+  at,
+  text,
+  me,
+  reactions = NO_REACTIONS,
+  onDelete,
+  onReact,
+  note,
+}: {
+  rowKey: string;
+  by: string | null;
+  name: string;
+  at: number | string;
+  text: string;
+  me: string | null;
+  reactions?: Reacted;
+  onDelete?: () => void;
+  onReact?: (emoji: string) => void;
+  /** A short muted line after the name ("sent by your agent"). */
+  note?: string;
+}) {
+  const now = useNow();
+  return (
+    // On a phone the comment runs under the avatar at full width; only the name line sits beside it.
+    <li data-key={rowKey} className="group grid grid-cols-[auto_minmax(0,1fr)] gap-x-3">
+      {by === "agent" ? <AgentAvatar /> : <Avatar email={by} />}
+      <div className="min-w-0 max-sm:contents">
+        {/* As tall as the avatar, so the name line centers on it and the comment starts below it. */}
+        <div className="flex flex-wrap items-baseline gap-x-2 text-sm leading-8">
+          <span className="font-semibold">{name}</span>
+          <span className="text-[13px] text-muted-foreground" title={new Date(at).toLocaleString()}>
+            {relativeTime(at, now)}
+          </span>
+          {note && <span className="text-[13px] text-muted-foreground">{note}</span>}
+          {onDelete && (
+            <button
+              type="button"
+              aria-label="Delete comment"
+              onClick={onDelete}
+              className="relative ml-auto cursor-pointer self-center rounded p-1 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 after:absolute after:-inset-1 after:content-[''] hover:text-negative focus-visible:opacity-100 pointer-coarse:opacity-70"
+            >
+              <Trash2 className="size-3.5" />
+            </button>
+          )}
+          {onReact && <ReactMenu of={reactions} me={me} onToggle={onReact} className={cn("self-center", onDelete ? "ml-1" : "ml-auto")} />}
+        </div>
+        <p className="-mt-1 text-[15px] leading-relaxed break-words whitespace-pre-wrap max-sm:col-span-2 max-sm:mt-1">{text}</p>
+        <ReactionChips commentKey={rowKey} of={reactions} me={me} onToggle={onReact} />
+      </div>
+    </li>
+  );
+}
+
+/**
+ * The box to write a comment in, beside the writer's avatar. `error` sits under the field (which is then marked
+ * invalid); while `busy` the button can't be pressed again. What was typed stays until the caller clears it.
+ */
+export function CommentComposer({
+  me,
+  value,
+  onChange,
+  onSubmit,
+  placeholder = "Add a comment…",
+  submitLabel = "Comment",
+  label,
+  busy = false,
+  error,
+  className,
+  fieldRef,
+}: {
+  me: string | null;
+  value: string;
+  onChange: (text: string) => void;
+  onSubmit: (e?: React.SyntheticEvent) => void;
+  placeholder?: string;
+  submitLabel?: string;
+  /** Read out for the field, when there's no visible heading saying what it's for. */
+  label?: string;
+  busy?: boolean;
+  error?: string | null;
+  className?: string;
+  fieldRef?: React.Ref<HTMLTextAreaElement>;
+}) {
+  const id = React.useId();
+  return (
+    <form onSubmit={onSubmit} className={cn("flex gap-3", className)} noValidate>
+      <Avatar email={me} />
+      <div className="min-w-0 flex-1">
+        <Textarea
+          ref={fieldRef}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) onSubmit(e);
+          }}
+          placeholder={placeholder}
+          aria-label={label}
+          aria-invalid={error ? true : undefined}
+          aria-describedby={error ? `${id}-error` : undefined}
+          rows={2}
+          className="min-h-16"
+        />
+        {error && (
+          <p id={`${id}-error`} role="alert" className="mt-1.5 mb-0 text-[14px] text-negative">
+            {error}
+          </p>
+        )}
+        <div className="mt-2 flex items-center justify-end gap-3">
+          <span className="text-xs text-muted-foreground pointer-coarse:hidden">⌘/Ctrl + Enter</span>
+          <Button type="button" onClick={onSubmit} size="sm" disabled={!value.trim() || busy} aria-busy={busy || undefined}>
+            <Send /> {submitLabel}
+          </Button>
+        </div>
+      </div>
+    </form>
   );
 }
 

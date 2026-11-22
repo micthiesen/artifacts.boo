@@ -2,7 +2,7 @@
 // here through useSyncExternalStore; the runtime feeds it ShellMessages and it
 // sends FrameMessages back through a pluggable transport (window.parent in the
 // frame, a fake in tests).
-import type { Backlink, FrameBoot, FrameMessage, JsonValue, Viewer } from "../shared/protocol.ts";
+import type { Backlink, ConversationView, FrameBoot, FrameMessage, JsonValue, Viewer } from "../shared/protocol.ts";
 import { SHARED_VALUE_MAX_BYTES } from "../shared/protocol.ts";
 
 export type Theme = "light" | "dark";
@@ -19,6 +19,9 @@ let presence: string[] = [];
 let links: { backlinks: Backlink[]; linkTitles: Record<string, string> } = { backlinks: [], linkTitles: {} };
 let theme: Theme = "light";
 let comments: CommentInfo = { counts: {}, canComment: false };
+/** A support case's page only: its conversation, as the shell sends it. null everywhere else. */
+let conversation: ConversationView | null = null;
+const replyWaiting = new Map<string, (r: { ok: boolean; reason?: string }) => void>();
 let initialized = false;
 let version = 0;
 const listeners = new Set<Listener>();
@@ -58,6 +61,8 @@ export function reset() {
   presence = [];
   theme = "light";
   comments = { counts: {}, canComment: false };
+  conversation = null;
+  replyWaiting.clear();
   initialized = false;
   prefixCache.clear();
   warned.clear();
@@ -120,6 +125,25 @@ export function setComments(next: CommentInfo) {
   if (next.canComment === comments.canComment && JSON.stringify(next.counts) === JSON.stringify(comments.counts)) return;
   comments = next;
   emit();
+}
+
+export const getConversation = () => conversation;
+export function setConversation(next: ConversationView) {
+  conversation = next;
+  emit();
+}
+
+/** Sends a reply to the conversation; resolves when the shell says it was saved or refused (and why). */
+export function sendReply(text: string): Promise<{ ok: boolean; reason?: string }> {
+  const cid = Math.random().toString(36).slice(2, 12);
+  return new Promise((resolve) => {
+    replyWaiting.set(cid, resolve);
+    post({ t: "conversation:reply", cid, text });
+  });
+}
+export function replyResult(cid: string, ok: boolean, reason?: string) {
+  replyWaiting.get(cid)?.({ ok, reason });
+  replyWaiting.delete(cid);
 }
 
 export function setPresence(v: string[]) {

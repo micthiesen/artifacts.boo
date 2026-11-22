@@ -23,6 +23,11 @@ export type DrawerOptions = {
   /** Threads changed: the frame redraws highlights. */
   onThreads: (threads: Thread[]) => void;
   onRead: (seq: number) => void;
+  /**
+   * A support case's page: the thread its page shows as its conversation. New threads aren't started there (the
+   * conversation is the one place to write), and the conversation can't be resolved.
+   */
+  conversation?: string;
 };
 
 type Filter = "open" | "resolved";
@@ -139,7 +144,7 @@ export function createDrawer(panel: HTMLElement, toggle: HTMLButtonElement, opts
 
     const body = el("div", "threads-body");
     if (draft) body.append(composer(draft.anchor));
-    if (opts.canComment && !draft && filter === "open") {
+    if (opts.canComment && !draft && filter === "open" && !opts.conversation) {
       const add = button("Comment on the whole page", "ghost add-page", () => {
         draft = { anchor: null };
         render();
@@ -305,7 +310,7 @@ export function createDrawer(panel: HTMLElement, toggle: HTMLButtonElement, opts
       c.append(reply);
       actions.append(button("Reply", "primary small", send));
     }
-    const mayResolve = opts.me && (opts.canResolveAny || t.by === opts.me);
+    const mayResolve = opts.me && (opts.canResolveAny || t.by === opts.me) && t.id !== opts.conversation;
     if (mayResolve) {
       actions.append(
         button(t.resolved ? "Reopen" : "Resolve", "ghost small", () =>
@@ -539,7 +544,7 @@ export function createDrawer(panel: HTMLElement, toggle: HTMLButtonElement, opts
 
   function resolveByKey(id: string) {
     const t = threads.get(id);
-    if (!t || !opts.me || !(opts.canResolveAny || t.by === opts.me)) return;
+    if (!t || !opts.me || !(opts.canResolveAny || t.by === opts.me) || id === opts.conversation) return;
     const resolved = !t.resolved;
     if (!opts.send({ t: "resolve", cid: cid(), thread: id, resolved })) return;
     // The next card takes the focus (the one before, at the end), so x can work down the list and the keys stay here.
@@ -678,7 +683,7 @@ export function createDrawer(panel: HTMLElement, toggle: HTMLButtonElement, opts
       render();
     },
     compose(anchor: Anchor) {
-      if (!opts.canComment) return;
+      if (!opts.canComment || opts.conversation) return;
       // Text already typed moves to the new selection rather than being dropped.
       draft = { anchor, text: draft?.text };
       filter = "open";
@@ -739,6 +744,20 @@ export function createDrawer(panel: HTMLElement, toggle: HTMLButtonElement, opts
       return "comment";
     },
     unread: unreadCount,
+    /** One thread as last received, and the people named in threads. */
+    thread(id: string): Thread | undefined {
+      return threads.get(id);
+    },
+    people(): Person[] {
+      return people;
+    },
+    /** The page showed these comments (a case's conversation): read up to `seq`. */
+    readUpTo(seq: number) {
+      if (seq <= readSeq) return;
+      readSeq = seq;
+      opts.onRead(seq);
+      updateToggle();
+    },
   };
 }
 

@@ -155,6 +155,40 @@ the assistant hears through events, not their email.
 - **Fixes** follow the operator's normal rules for the assistant (review,
   deploy). Nothing here deploys or changes code by itself.
 
+## Agent feedback
+
+Agents send notes about the tools themselves with `agent_feedback`: the
+guide or a tool description was wrong, a check passed a page that looks
+broken, the kit couldn't do something and the agent worked around it, a
+step took far more tries than it should. It isn't a request: nobody waits
+on a note and nobody replies, so it makes no page, email, inbox item or
+event. A user who wants an answer uses `support_report`.
+
+- **Who:** agents only (MCP), on any workspace. Each note has a kind
+  (bug, missing, docs, friction), an area (a tool, a kit component, guide,
+  render-check, save-check, other), what was expected, what happened, the
+  workaround, an impact (blocked, degraded, slowed) and optionally a repro
+  with placeholder data and an artifact id. For an artifact only its id,
+  version, entry type and stored check status are recorded, never its
+  content, and the id grants nobody access.
+- **Limits:** 3 notes a person, 10 a workspace and 100 for everyone in a
+  rolling day, apart from the support limits. The same person, kind, area
+  and summary again within 7 days only adds to the note's count. At most
+  500 open notes; past that, new ones aren't recorded and the operator gets
+  one alert. Fields are capped (about 4 KB a note).
+- **Reading them:** `support_feedback` (operator, support workspace) gives
+  counts only by default: open and new notes by area, kind and impact, as
+  notes, distinct people and distinct workspaces, how many came from the
+  operator's own agents, how many are blocked, and the oldest. A weekly
+  digest (a routine outside this repository) should read only these counts. `items: true` returns the text, quoted
+  under a line saying other people's agents wrote it; only the plan-only
+  session working the batch asks for it.
+- **Closing them:** `support_feedback_update` closes notes as fixed (with
+  version and commit), documented, declined or mistake, and deletes their
+  text at once. The rest of the row is kept 90 days for counts; an open
+  note nobody got to is dropped after 90 days. Deleting an account or a
+  workspace deletes its notes.
+
 ## Errors
 
 - **Server:** failures that escape a request, and internal errors behind a

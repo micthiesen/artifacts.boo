@@ -311,6 +311,12 @@ export async function boot(options: BootOptions = {}): Promise<void> {
       case "threads":
         whenRendered(() => setThreads(msg.threads, msg.canComment));
         break;
+      case "conversation":
+        store.setConversation(msg.conversation);
+        break;
+      case "conversation:result":
+        store.replyResult(msg.cid, msg.ok === true, typeof msg.reason === "string" ? msg.reason : undefined);
+        break;
       case "focus":
         whenRendered(() => focusThread(msg.thread));
         break;
