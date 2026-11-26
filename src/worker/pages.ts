@@ -693,7 +693,7 @@ export function pricingPage(brand: Brand, selfServe: boolean, viewer?: { email: 
       `<a class="button${primary ? "" : " secondary"}" href="/workspaces?plan=${id}">Get ${PLANS[id].label}</a>`,
     );
   };
-  const INCLUDED = "Guests, approvals, forms, comments and MCP events included (storage, size and rate limits apply)";
+  const INCLUDED = "Guests, approvals, forms, comments and MCP events included";
   const account = viewer
     ? `<a class="button small secondary" href="/workspaces">Your workspaces</a>${avatar(viewer.email, brand, "account", { operator: viewer.operator })}${ACCOUNT_SCRIPT}`
     : `<a class="button small secondary" href="/login">Sign in</a>`;
@@ -701,27 +701,28 @@ export function pricingPage(brand: Brand, selfServe: boolean, viewer?: { email: 
     `Pricing · ${PRODUCT}`,
     `${topBar(brand, account)}<main class="splash pricing">
 <section class="splash-hero"><h1>Pricing</h1>
-<p class="splash-lede muted">A workspace pays, once, however many people read its artifacts. Guests, the people you share with, never need an account or a plan.</p></section>
+<p class="splash-lede muted">Plans are per workspace, billed monthly. The people you share with are guests: however many there are, they never need an account or a plan.</p></section>
 <section class="splash-grid pricing-grid${personal ? " pricing-grid-3" : ""}">
 ${plan("Free", `$0 <span class="muted">/ workspace</span>`, personal ? "For trying it out." : "For trying it out, or a small personal workspace.", [
-  `${free.artifacts} artifacts (archived ones count; delete to make room) and ${free.members} members`,
+  `${free.artifacts} artifacts and ${free.members} members (archived artifacts count; delete to make room)`,
   `${gb(free.bytes!)} of storage, ${free.changesPerDay} saves, ${free.checksPerDay} render checks and ${free.emailsPerDay} emails a day (${free.inviteEmailsPerDay} kept for invitations and shares)`,
   INCLUDED,
 ], selfServe ? `<a class="button secondary" href="/workspaces">Start free</a>` : `<p class="muted small">New workspaces are by invitation for now.</p>`)}
-${personal ? paid("personal", "For one person who publishes with their agent.", "No limit on the number of artifacts, for one member (storage and daily limits apply)", true) : ""}
+${personal ? paid("personal", "For one person who publishes with their agent.", "One member, and no limit on the number of artifacts", true) : ""}
 ${paid(
   "team",
   "For a team that publishes and decides with its agents every day.",
-  personal ? "Everything in Personal, for as many members as you like (storage and daily limits apply)" : "No limit on the number of artifacts or members (storage and daily limits apply)",
+  "No limit on the number of members or artifacts",
   !personal,
 )}
 </section>
 <section class="pricing-notes muted">
 <p><strong>No lock-in.</strong> Admins can download the latest backup of their workspace from its settings, in a <a href="${REPO}/blob/main/docs/EXPORT.md">documented format</a>, and ask for a fresh one once an hour. The <a href="${REPO}">source</a> runs on your own Cloudflare account.</p>
-<p>The person who pays can <strong>cancel any time</strong> from the workspace's settings. The plan stays until the end of the period you paid for, then the workspace moves to Free and keeps everything.</p>
-${personal ? `<p><strong>Change plan any time</strong> from the workspace's settings, and it takes effect at once. ${PLAN_CHANGE_TERMS} Personal is for one member, so a workspace with more moves to it once the others are removed. A workspace over its new plan's limits keeps everything; it only can't add more until it's back under them.</p>` : ""}
-<p>Payments are handled by Creem, our merchant of record: they're the seller on your invoice and handle sales tax and VAT. Prices are in US dollars, plus tax where it applies. See the <a href="/terms">terms</a> for refunds.</p>
-<p>To keep throwaway workspaces from being used for spam, a new Free workspace's first day has no public links and only a few invitation and share emails. Sharing with people works from the start.</p>
+<p>The person who pays can <strong>cancel any time</strong> from the workspace's settings. The plan stays until the end of the month already paid for, then the workspace moves to Free and keeps everything.</p>
+${personal ? `<p><strong>Change plan any time</strong> from the workspace's settings; it takes effect at once. ${PLAN_CHANGE_TERMS} Personal is for one member, so a workspace with more can move to it once the others are removed. A workspace over its new plan's limits keeps everything and only can't add more until it's back under them.</p>` : ""}
+<p>Payments are handled by Creem, our merchant of record: they're the seller on your invoice and handle sales tax and VAT. Prices are in US dollars a month, plus tax where it applies. See the <a href="/terms">terms</a> for refunds.</p>
+<p>Size limits per file and per artifact are the same on every plan.</p>
+<p>To keep throwaway workspaces from being used for spam, a new Free workspace can't turn on public links on its first day, and sends only a few invitation and share emails. Sharing with people by email works from the start.</p>
 </section>
 <footer class="splash-foot muted"><a href="/help">Help</a> · <a href="/privacy">Privacy</a> · <a href="/terms">Terms</a> · <a href="/security">Security and data</a></footer>
 </main>`,
