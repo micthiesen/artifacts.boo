@@ -180,8 +180,7 @@ test("Team to Personal: refused while there is more than one member; then at onc
   await webhook(event("refund.created", { id: "ref_1", object: "refund", subscription: { id: "sub_1", object: "subscription", metadata: { workspace: "acme" } } }));
   expect(kinds()).toContain("billing_proration_refund");
   expect(kinds()).not.toContain("billing_refund_or_dispute");
-  // A refund with no plan change behind it still alerts.
-  (env.OAUTH_KV as FakeKV) = new FakeKV();
+  // Only that one: the next refund, with no plan change behind it, alerts.
   await webhook(event("refund.created", { id: "ref_2", object: "refund", subscription: { id: "sub_1", object: "subscription", metadata: { workspace: "acme" } } }));
   expect(kinds()).toContain("billing_refund_or_dispute");
 });
@@ -459,7 +458,8 @@ test("the pricing page leads with Personal between Free and Team, and carries th
   expect(terms).toContain("Each workspace is on Free, Personal or Team.");
   expect(terms).toContain(`Last updated ${POLICY_UPDATED}`);
   expect(POLICY_UPDATED >= "2026-11-26").toBe(true);
-  // Signed out, the choice survives sign-in; signed in, each workspace's settings link carries it.
+  // Signed out, the choice survives sign-in (so does coming back from checkout); signed in, each workspace's settings link carries it.
+  expect((await send("/settings?billing=done", { redirect: "manual" })).headers.get("Location")).toBe(`${ACME}/login?return=${encodeURIComponent("/settings?billing=done")}`);
   expect((await send("/workspaces?plan=personal", { host: APEX, redirect: "manual" })).headers.get("Location")).toBe(`${APEX}/login?return=${encodeURIComponent("/workspaces?plan=personal")}`);
   expect((await send("/workspaces?plan=gold", { host: APEX, redirect: "manual" })).headers.get("Location")).toBe(`${APEX}/login?return=/workspaces`);
   await h.directory.setMembership("acme", ADMIN, "admin");

@@ -569,7 +569,8 @@ async function workspaceRoute(request: Request, env: Env): Promise<Response> {
   }
   if (path === "/api/me" || path.startsWith("/api/me/")) return workspaceMeApi(request, url, env, hub, session);
   if (path === "/settings") {
-    if (!viewer.email) return signIn("/settings");
+    // With its query: back from checkout (?billing=done) or from the pricing page (?plan=) signed out, settings still knows.
+    if (!viewer.email) return signIn(`/settings${url.search}`);
     const { member, colour } = await hub.access(viewer.email);
     if (!member) return messagePage("Members only", `${viewer.email} isn't a member of ${record.name}. Ask a workspace admin to add you.`, 403, undefined, brand);
     brand.colour = colour;
@@ -1010,7 +1011,9 @@ async function billingWebhook(request: Request, env: Env): Promise<Response> {
     if (type.startsWith("refund.") || type.startsWith("dispute.")) {
       const slug = await refundWorkspace(env, e?.object);
       // Moving to a smaller plan refunds the unused part of the bigger one: expected, so it's logged without an alert.
+      // One refund per move: a second within the hour (the operator refunding something else) alerts as usual.
       if (type.startsWith("refund.") && slug && (await env.OAUTH_KV.get(`${PLAN_CHANGE_PREFIX}${slug}`).catch(() => null))) {
+        await env.OAUTH_KV.delete(`${PLAN_CHANGE_PREFIX}${slug}`).catch(() => {});
         await ops(env, { kind: "billing_proration_refund", slug, message: `Creem refunded ${slug} the unused part of its previous plan after a plan change.`, detail: { eventId: e?.id }, alert: false });
         return Response.json({ ignored: true });
       }
@@ -1069,7 +1072,7 @@ async function billingWebhook(request: Request, env: Env): Promise<Response> {
 
 /** KV: a workspace's checkout started in the last 15 minutes. */
 const CHECKOUT_PREFIX = "checkout:";
-/** KV: a workspace changed plan in the last hour (so the refund Creem sends for a downgrade isn't an alert). */
+/** KV: a workspace moved to a smaller plan in the last hour and Creem's refund for it hasn't arrived yet (so that one refund isn't an alert). */
 const PLAN_CHANGE_PREFIX = "planchange:";
 
 /**

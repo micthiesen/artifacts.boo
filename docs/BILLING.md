@@ -55,7 +55,8 @@ offered anywhere and Team works as before. There is no annual plan.
     period now, then $25 from the next renewal on the same date.
   - Team to Personal takes effect now, and Creem refunds the unused part of
     Team. That refund's event is logged (`billing_proration_refund`)
-    without an alert for an hour after the move.
+    without an alert: the first refund in the hour after the move, and
+    only that one.
   - The answer's product and status decide, never what was asked. If the
     answer isn't the subscription paid up on the product asked for (a
     pro-rated charge that didn't go through), nothing is applied, the
