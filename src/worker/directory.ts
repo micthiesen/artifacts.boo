@@ -7,7 +7,7 @@ import { DurableObject } from "cloudflare:workers";
 import { migrate, type Migration } from "./migrate.ts";
 import type { ChannelType } from "./notify.ts";
 import { DIRECTORY_TABLES } from "./tables.ts";
-import type { PlanId } from "./plans.ts";
+import { isPaidPlan, type PaidPlanId, type PlanId } from "./plans.ts";
 import { planFor, type BillingUpdate } from "./billing.ts";
 
 export type BillingRecord = {
@@ -18,6 +18,9 @@ export type BillingRecord = {
   periodEnd: string | null;
   updatedAt: string;
   payerEmail: string | null;
+  /** The plan the subscription pays for (its product), and that product in the provider. */
+  plan: PaidPlanId;
+  productId: string | null;
 };
 import {
   backupRuns,
@@ -65,6 +68,17 @@ export type ChannelRow = { id: string; type: ChannelType; config: Record<string,
 const REPORTS_PER_HOUR_MAX = 200;
 
 export class DirectoryError extends Error {}
+
+const paidPlan = (v: unknown): PaidPlanId => (isPaidPlan(v) ? v : "team");
+
+function supersededIds(v: unknown): string[] {
+  try {
+    const ids: unknown = typeof v === "string" ? JSON.parse(v) : [];
+    return Array.isArray(ids) ? ids.filter((x): x is string => typeof x === "string") : [];
+  } catch {
+    return [];
+  }
+}
 
 export type SupportCase = {
   n: number;
@@ -391,6 +405,16 @@ const MIGRATIONS: Migration[] = [
       CREATE INDEX agent_feedback_by_workspace ON agent_feedback (workspace, created_at);
       CREATE INDEX agent_feedback_by_created ON agent_feedback (created_at);
     `),
+  // Which plan a subscription pays for, now that there is more than one (rows from before are Team, the only
+  // product there was), its product, when the provider last changed the subscription itself, and the
+  // subscriptions this one replaced (a JSON array of ids, the latest ten), which never take over again.
+  (sql) =>
+    sql.exec(`
+      ALTER TABLE billing ADD COLUMN plan TEXT NOT NULL DEFAULT 'team';
+      ALTER TABLE billing ADD COLUMN product_id TEXT;
+      ALTER TABLE billing ADD COLUMN sub_at INTEGER;
+      ALTER TABLE billing ADD COLUMN superseded TEXT;
+    `),
 ];
 
 export class Directory extends DurableObject {
@@ -511,6 +535,8 @@ export class Directory extends DurableObject {
           periodEnd: (r.period_end as string | null) ?? null,
           updatedAt: r.updated_at as string,
           payerEmail: (r.payer_email as string | null) ?? null,
+          plan: paidPlan(r.plan),
+          productId: (r.product_id as string | null) ?? null,
         }
       : null;
   }
@@ -520,10 +546,22 @@ export class Directory extends DurableObject {
    * subscription pays for, or null when it concerns no known workspace. The
    * plan always comes from the stored record, never the event alone, so a
    * repeated delivery re-applies it (healing a plan change that failed
-   * before), and events arriving out of order or from an old, replaced
-   * subscription can't leave the workspace on the wrong plan.
+   * before), and events arriving out of order, resent by hand, or from an
+   * old, replaced subscription can't leave the workspace on the wrong plan.
+   *
+   * `answer`: not an event but the provider's answer to a change we just asked
+   * for (a plan change), timed by our clock. It is the subscription as it is
+   * now, so it applies whatever the event clock says, and events made before
+   * it then change nothing.
+   *
+   * `replaced`: a subscription that lost to another for this workspace and
+   * should be canceled at the provider; `by` is the one the workspace keeps.
    */
-  applyBilling(u: BillingUpdate, provider: string): { slug: string; plan: PlanId; until: string | null; replaced?: string } | null {
+  applyBilling(
+    u: BillingUpdate,
+    provider: string,
+    answer = false,
+  ): { slug: string; plan: PlanId; until: string | null; replaced?: { subscriptionId: string; status: string; by: string } } | null {
     const bySub = u.subscriptionId ? (this.sql.exec(`SELECT slug FROM billing WHERE subscription_id = ?`, u.subscriptionId).toArray()[0]?.slug as string | undefined) : undefined;
     // By name, only the workspace that started the checkout: not a later one at the same address.
     const named = u.workspace ? this.workspace(u.workspace) : null;
@@ -531,43 +569,72 @@ export class Directory extends DurableObject {
     const slug = bySub ?? (sameWorkspace ? u.workspace : null);
     if (!slug) return null;
     const row = this.sql.exec(`SELECT * FROM billing WHERE slug = ?`, slug).toArray()[0];
-    let replaced: string | undefined;
+    let replaced: { subscriptionId: string; status: string; by: string } | undefined;
     const seen = this.sql.exec(`SELECT 1 FROM billing_events WHERE id = ?`, u.eventId).toArray().length > 0;
     if (!seen) {
       this.sql.exec(`INSERT INTO billing_events (id, at) VALUES (?, ?)`, u.eventId, Date.now());
       this.sql.exec(`DELETE FROM billing_events WHERE at < ?`, Date.now() - 90 * 86_400_000);
-      const other = row && row.subscription_id && u.subscriptionId && row.subscription_id !== u.subscriptionId;
-      const newer = !row || (row.event_at as number) <= u.at;
-      // A different subscription only takes over by actively paying; an old one's later events change nothing.
-      const takesOver = !other || u.plan === "team";
+      const other = Boolean(row && row.subscription_id && u.subscriptionId && row.subscription_id !== u.subscriptionId);
+      const superseded = supersededIds(row?.superseded);
+      // Events are ordered by when they were made. An event resent by hand from the provider's dashboard gets a
+      // new id and time, though, and would look newest: it's told apart by the subscription inside it, which is
+      // as it was back then (last changed strictly before the one already applied). Equal times still apply, so
+      // nothing depends on the provider touching that timestamp on every change.
+      const stale = Boolean(row) && !other && typeof row!.sub_at === "number" && u.subAt !== null && u.subAt < (row!.sub_at as number);
+      const newer = !row || answer || ((row.event_at as number) <= u.at && !stale);
+      const paying = u.plan !== null && u.plan !== "free";
+      // A different subscription only takes over by actively paying, and never one this workspace already
+      // replaced (its old payment event, resent, would otherwise bring it back); an old one's later events change nothing.
+      const takesOver = !other || (paying && !superseded.includes(u.subscriptionId!));
       // A workspace with no subscription yet only gets one by paying (an operator-set plan isn't touched otherwise).
-      const starts = row || u.plan === "team";
+      const starts = row || paying;
       if (newer && takesOver && starts) {
-        if (other) replaced = String(row!.subscription_id);
+        if (other) {
+          replaced = { subscriptionId: String(row!.subscription_id), status: String(row!.status), by: u.subscriptionId! };
+          superseded.push(replaced.subscriptionId);
+        }
         this.sql.exec(
-          `INSERT INTO billing (slug, provider, customer_id, subscription_id, status, period_end, event_at, updated_at, payer_email) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `INSERT INTO billing (slug, provider, customer_id, subscription_id, status, period_end, event_at, updated_at, payer_email, plan, product_id, sub_at, superseded)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, COALESCE(?10, 'team'), ?11, ?12, ?13)
            ON CONFLICT (slug) DO UPDATE SET provider = excluded.provider, customer_id = COALESCE(excluded.customer_id, customer_id),
+             plan = COALESCE(?10, plan), product_id = COALESCE(excluded.product_id, product_id),
+             sub_at = CASE WHEN excluded.subscription_id IS NOT NULL AND excluded.subscription_id IS NOT subscription_id THEN excluded.sub_at
+               ELSE COALESCE(excluded.sub_at, sub_at) END,
+             superseded = excluded.superseded,
              payer_email = CASE WHEN excluded.customer_id IS NOT NULL AND excluded.customer_id IS NOT customer_id THEN excluded.payer_email
                ELSE COALESCE(excluded.payer_email, payer_email) END,
              subscription_id = COALESCE(excluded.subscription_id, subscription_id), status = excluded.status,
-             period_end = COALESCE(excluded.period_end, period_end), event_at = excluded.event_at, updated_at = excluded.updated_at`,
+             period_end = COALESCE(excluded.period_end, period_end), event_at = MAX(event_at, excluded.event_at), updated_at = excluded.updated_at`,
           slug,
           provider,
           u.customerId,
           u.subscriptionId,
           u.status,
-          // A failed or expired subscription with no period end on record would otherwise keep Team for good:
+          // A failed or expired subscription with no period end on record would otherwise keep its plan for good:
           // count its grace from now.
-          u.periodEnd ?? (["past_due", "unpaid", "expired"].includes(u.status) && !row?.period_end ? new Date().toISOString() : null),
+          u.periodEnd ?? (["past_due", "unpaid", "expired", "incomplete"].includes(u.status) && !row?.period_end ? new Date().toISOString() : null),
           u.at,
           new Date().toISOString(),
           u.payerEmail,
+          // A product that isn't ours keeps the plan the record had: it never grants one.
+          u.paid,
+          u.productId,
+          u.subAt,
+          superseded.length ? JSON.stringify(superseded.slice(-10)) : null,
         );
+        this.markDirty();
+      } else if (other && paying && !superseded.includes(u.subscriptionId!) && ["active", "trialing"].includes(String(row!.status))) {
+        // Another subscription's payment, made before the latest event of the one this workspace is paid up on
+        // (two checkouts both paid, and this one's event was delivered late). It never becomes the workspace's
+        // subscription, so it is the one to cancel; left alone it would charge every period with no record here.
+        superseded.push(u.subscriptionId!);
+        this.sql.exec(`UPDATE billing SET superseded = ? WHERE slug = ?`, JSON.stringify(superseded.slice(-10)), slug);
+        replaced = { subscriptionId: u.subscriptionId!, status: u.status, by: String(row!.subscription_id) };
         this.markDirty();
       }
     }
-    const current = this.sql.exec(`SELECT status, period_end FROM billing WHERE slug = ?`, slug).toArray()[0];
-    return current ? { slug, ...planFor(current.status as string, (current.period_end as string | null) ?? null), ...(replaced ? { replaced } : {}) } : null;
+    const now = this.billingPlan(slug);
+    return now ? { slug, ...now, ...(replaced ? { replaced } : {}) } : null;
   }
 
   /**
@@ -579,8 +646,9 @@ export class Directory extends DurableObject {
     if (!row) return null;
     const now = new Date().toISOString();
     this.sql.exec(
-      `UPDATE billing SET status = 'canceled', period_end = ?, event_at = MAX(event_at, ?), updated_at = ? WHERE slug = ?`,
+      `UPDATE billing SET status = 'canceled', period_end = ?, event_at = MAX(event_at, ?), sub_at = MAX(COALESCE(sub_at, 0), ?), updated_at = ? WHERE slug = ?`,
       now,
+      Date.now(),
       Date.now(),
       now,
       slug,
@@ -595,8 +663,8 @@ export class Directory extends DurableObject {
 
   /** The plan a workspace's stored subscription pays for, or null when it has none (the operator sets its plan). */
   billingPlan(slug: string): { plan: PlanId; until: string | null } | null {
-    const row = this.sql.exec(`SELECT status, period_end FROM billing WHERE slug = ?`, slug).toArray()[0];
-    return row ? planFor(row.status as string, (row.period_end as string | null) ?? null) : null;
+    const row = this.sql.exec(`SELECT status, period_end, plan FROM billing WHERE slug = ?`, slug).toArray()[0];
+    return row ? planFor(paidPlan(row.plan), row.status as string, (row.period_end as string | null) ?? null) : null;
   }
 
   async setSuspended(slug: string, suspended: boolean) {
@@ -1081,10 +1149,11 @@ export class Directory extends DurableObject {
   }
 
   /** Every workspace's subscription, for the operator console in one call. */
-  billingAll(): Record<string, { status: string; periodEnd: string | null; payerEmail: string | null; subscriptionId: string | null }> {
-    const out: Record<string, { status: string; periodEnd: string | null; payerEmail: string | null; subscriptionId: string | null }> = {};
-    for (const r of this.sql.exec(`SELECT slug, status, period_end, payer_email, subscription_id FROM billing`)) {
+  billingAll(): Record<string, { status: string; periodEnd: string | null; payerEmail: string | null; subscriptionId: string | null; plan: PaidPlanId }> {
+    const out: ReturnType<Directory["billingAll"]> = {};
+    for (const r of this.sql.exec(`SELECT slug, status, period_end, payer_email, subscription_id, plan FROM billing`)) {
       out[r.slug as string] = {
+        plan: paidPlan(r.plan),
         status: r.status as string,
         periodEnd: (r.period_end as string | null) ?? null,
         payerEmail: (r.payer_email as string | null) ?? null,

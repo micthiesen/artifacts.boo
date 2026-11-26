@@ -18,6 +18,7 @@ const MEMBER = "member@example.com";
 const SECRET = "whsec_test_creem_secret";
 const ctx = { waitUntil() {}, passThroughOnException() {}, props: {} } as unknown as ExecutionContext;
 
+const PRODUCTS = { prod_team: "team" } as const;
 const KEYS = { BILLING: "on", CREEM_API_KEY: "creem_test_abc", CREEM_WEBHOOK_SECRET: SECRET, CREEM_PRODUCT_ID: "prod_team" };
 
 beforeEach(async () => {
@@ -104,18 +105,18 @@ test("signatures are hex HMAC-SHA256 of the raw body", async () => {
 });
 
 test("events map to plans: paid and active are Team, canceled and paused are Free, failed payments keep Team", () => {
-  expect(readEvent(checkoutCompleted())).toMatchObject({ workspace: "acme", customerId: "cust_1", subscriptionId: "sub_1", plan: "team" });
-  expect(readEvent(event("subscription.paid", sub("active")))?.plan).toBe("team");
-  expect(readEvent(event("subscription.trialing", sub("trialing")))?.plan).toBe("team");
-  expect(readEvent(event("subscription.scheduled_cancel", sub("scheduled_cancel")))).toMatchObject({ plan: null, status: "scheduled_cancel" });
-  for (const s of ["past_due", "unpaid"]) expect(readEvent(event(`subscription.${s}`, sub(s)))?.plan).toBeNull();
-  expect(readEvent(event("subscription.expired", sub("active")))?.plan).toBe("team");
-  expect(readEvent(event("subscription.canceled", sub("canceled")))?.plan).toBe("free");
-  expect(readEvent(event("subscription.paused", sub("paused")))?.plan).toBe("free");
-  expect(readEvent(event("refund.created", { id: "ref_1", object: "refund" }))).toBeNull();
-  expect(readEvent({ nonsense: true })).toBeNull();
+  expect(readEvent(checkoutCompleted(), PRODUCTS)).toMatchObject({ workspace: "acme", customerId: "cust_1", subscriptionId: "sub_1", plan: "team" });
+  expect(readEvent(event("subscription.paid", sub("active")), PRODUCTS)?.plan).toBe("team");
+  expect(readEvent(event("subscription.trialing", sub("trialing")), PRODUCTS)?.plan).toBe("team");
+  expect(readEvent(event("subscription.scheduled_cancel", sub("scheduled_cancel")), PRODUCTS)).toMatchObject({ plan: null, status: "scheduled_cancel" });
+  for (const s of ["past_due", "unpaid"]) expect(readEvent(event(`subscription.${s}`, sub(s)), PRODUCTS)?.plan).toBeNull();
+  expect(readEvent(event("subscription.expired", sub("active")), PRODUCTS)?.plan).toBe("team");
+  expect(readEvent(event("subscription.canceled", sub("canceled")), PRODUCTS)?.plan).toBe("free");
+  expect(readEvent(event("subscription.paused", sub("paused")), PRODUCTS)?.plan).toBe("free");
+  expect(readEvent(event("refund.created", { id: "ref_1", object: "refund" }), PRODUCTS)).toBeNull();
+  expect(readEvent({ nonsense: true }, PRODUCTS)).toBeNull();
   // Without an id and a time it can't be ordered or de-duplicated.
-  expect(readEvent({ eventType: "subscription.paid", object: sub("active") })).toBeNull();
+  expect(readEvent({ eventType: "subscription.paid", object: sub("active") }, PRODUCTS)).toBeNull();
 });
 
 test("off by default: no pricing page, no webhook, nothing in settings", async () => {
@@ -134,9 +135,9 @@ test("on without keys: the pricing page shows, but nobody can check out yet", as
   expect(html).toContain("$25");
   expect(html).toContain("merchant of record");
   expect(await (await send("/", { host: APEX })).text()).toContain('href="/pricing"');
-  const settings = (await (await send("/api/settings", { as: ADMIN })).json()) as { billing: { ready: boolean } };
-  expect(settings.billing.ready).toBe(false);
-  const checkout = await send("/api/settings/billing/checkout", { as: ADMIN, method: "POST", body: "{}", headers: { "Content-Type": "application/json" } });
+  const settings = (await (await send("/api/settings", { as: ADMIN })).json()) as { billing: { plans: Record<string, { ready: boolean; offered: boolean }> } };
+  expect(settings.billing.plans).toMatchObject({ team: { ready: false, offered: false }, personal: { ready: false, offered: false } });
+  const checkout = await send("/api/settings/billing/checkout", { as: ADMIN, method: "POST", body: '{"plan":"team"}', headers: { "Content-Type": "application/json" } });
   expect(checkout.status).toBe(503);
   expect(calls).toEqual([]);
 });
@@ -144,7 +145,7 @@ test("on without keys: the pricing page shows, but nobody can check out yet", as
 test("checkout: admins only; Creem gets the product, the admin's email and the workspace; test keys use the sandbox", async () => {
   Object.assign(env, KEYS);
   creemAnswer = () => Response.json({ id: "ch_1", checkout_url: "https://checkout.creem.io/ch_1" });
-  const post = (as: string) => send("/api/settings/billing/checkout", { as, method: "POST", body: "{}", headers: { "Content-Type": "application/json" } });
+  const post = (as: string) => send("/api/settings/billing/checkout", { as, method: "POST", body: '{"plan":"team"}', headers: { "Content-Type": "application/json" } });
   expect((await post(MEMBER)).status).toBe(403);
   const r = await post(ADMIN);
   expect(await r.json()).toEqual({ url: "https://checkout.creem.io/ch_1" });
@@ -208,7 +209,7 @@ test("the portal link is for workspaces with a subscription, from Creem", async 
   expect(await (await portal()).json()).toEqual({ url: "https://creem.io/portal/cust_1" });
   expect(calls.at(-1)).toMatchObject({ url: "https://test-api.creem.io/v1/customers/billing", body: { customer_id: "cust_1" } });
   // Already on Team: no second checkout.
-  const again = await send("/api/settings/billing/checkout", { as: ADMIN, method: "POST", body: "{}", headers: { "Content-Type": "application/json" } });
+  const again = await send("/api/settings/billing/checkout", { as: ADMIN, method: "POST", body: '{"plan":"team"}', headers: { "Content-Type": "application/json" } });
   expect(again.status).toBe(400);
 });
 
@@ -283,10 +284,10 @@ test("canceling keeps Team until the paid period ends, then it lapses to Free by
 test("a failed payment keeps Team for two weeks past the period; a pause until the period ends", () => {
   const end = "2026-11-18T00:00:00.000Z";
   const at = (iso: string) => Date.parse(iso);
-  expect(planFor("past_due", end, at("2026-11-20T00:00:00.000Z"))).toEqual({ plan: "team", until: "2026-12-02T00:00:00.000Z" });
-  expect(planFor("unpaid", end, at("2026-12-03T00:00:00.000Z"))).toEqual({ plan: "free", until: null });
-  expect(planFor("paused", end, at("2026-11-01T00:00:00.000Z"))).toEqual({ plan: "team", until: end });
-  expect(planFor("paused", end, at("2026-11-19T00:00:00.000Z"))).toEqual({ plan: "free", until: null });
+  expect(planFor("team", "past_due", end, at("2026-11-20T00:00:00.000Z"))).toEqual({ plan: "team", until: "2026-12-02T00:00:00.000Z" });
+  expect(planFor("team", "unpaid", end, at("2026-12-03T00:00:00.000Z"))).toEqual({ plan: "free", until: null });
+  expect(planFor("team", "paused", end, at("2026-11-01T00:00:00.000Z"))).toEqual({ plan: "team", until: end });
+  expect(planFor("team", "paused", end, at("2026-11-19T00:00:00.000Z"))).toEqual({ plan: "free", until: null });
   const soon = new Date(Date.now() + 5 * 86_400_000).toISOString();
   expect(subscriptionLive("past_due", soon) && subscriptionLive("paused", soon) && !subscriptionLive("canceled", soon)).toBe(true);
   expect(subscriptionLive("expired", "2020-01-01T00:00:00.000Z")).toBe(false);
@@ -294,7 +295,7 @@ test("a failed payment keeps Team for two weeks past the period; a pause until t
 
 test("no second checkout while a subscription can still charge; a lapsed one can be replaced", async () => {
   Object.assign(env, KEYS);
-  const checkout = () => send("/api/settings/billing/checkout", { as: ADMIN, method: "POST", body: "{}", headers: { "Content-Type": "application/json" } });
+  const checkout = () => send("/api/settings/billing/checkout", { as: ADMIN, method: "POST", body: '{"plan":"team"}', headers: { "Content-Type": "application/json" } });
   await webhook(checkoutCompleted());
   // Paused with time left: still Team, so no checkout.
   await webhook(event("subscription.paused", { ...sub("paused"), current_period_end_date: new Date(Date.now() + 5 * 86_400_000).toISOString() }));
@@ -315,7 +316,7 @@ test("if the plan drifted from a subscription that can still charge, checkout he
   // Directory says paused with time left, but the workspace somehow reads Free: the server heals it instead of a checkout.
   await webhook(event("subscription.paused", { ...sub("paused"), current_period_end_date: new Date(Date.now() + 5 * 86_400_000).toISOString() }));
   await h.hub.setPlan("free");
-  const r = await send("/api/settings/billing/checkout", { as: ADMIN, method: "POST", body: "{}", headers: { "Content-Type": "application/json" } });
+  const r = await send("/api/settings/billing/checkout", { as: ADMIN, method: "POST", body: '{"plan":"team"}', headers: { "Content-Type": "application/json" } });
   expect(r.status).toBe(409);
   expect(h.hub.plan().id).toBe("team");
 });
@@ -414,7 +415,7 @@ test("canceled with paid time left: subscribing again is allowed, and the new su
   await webhook(event("subscription.canceled", { ...sub("canceled"), current_period_end_date: new Date(Date.now() + 10 * 86_400_000).toISOString() }));
   expect(h.hub.plan().id).toBe("team");
   creemAnswer = () => Response.json({ checkout_url: "https://checkout.creem.io/ch_3" });
-  expect((await send("/api/settings/billing/checkout", { as: ADMIN, method: "POST", body: "{}", headers: { "Content-Type": "application/json" } })).status).toBe(200);
+  expect((await send("/api/settings/billing/checkout", { as: ADMIN, method: "POST", body: '{"plan":"team"}', headers: { "Content-Type": "application/json" } })).status).toBe(200);
   await webhook(event("subscription.active", { ...sub("active"), id: "sub_9" }));
   expect(h.hub.plan()).toMatchObject({ id: "team", until: null });
   expect(h.directory.billing("acme")?.subscriptionId).toBe("sub_9");
@@ -461,7 +462,7 @@ test("a second subscription, a refund or a dispute alerts the operator; End bill
 test("checkout carries when the workspace was made, so one made later at the same address doesn't get the payment", async () => {
   Object.assign(env, KEYS);
   creemAnswer = () => Response.json({ id: "ch_1", checkout_url: "https://checkout.creem.io/ch_1" });
-  await send("/api/settings/billing/checkout", { as: ADMIN, method: "POST", body: "{}", headers: { "Content-Type": "application/json" } });
+  await send("/api/settings/billing/checkout", { as: ADMIN, method: "POST", body: '{"plan":"team"}', headers: { "Content-Type": "application/json" } });
   const created = h.directory.workspace("acme")!.createdAt;
   expect(calls[0].body.metadata).toEqual({ workspace: "acme", created });
   const paid = (when: string) => {
@@ -491,7 +492,7 @@ test("Team given free by the operator stays whatever billing says, and turning i
   expect(await (await freeTeam(true)).json()).toMatchObject({ plan: { id: "team", free: true } });
   expect(h.directory.workspace("acme")?.stats).toMatchObject({ plan: "team", freeTeam: true });
   // No checkout for it; a subscription's events don't move it.
-  const checkout = await send("/api/settings/billing/checkout", { as: ADMIN, method: "POST", body: "{}", headers: { "Content-Type": "application/json" } });
+  const checkout = await send("/api/settings/billing/checkout", { as: ADMIN, method: "POST", body: '{"plan":"team"}', headers: { "Content-Type": "application/json" } });
   expect(checkout.status).toBe(400);
   await webhook(checkoutCompleted());
   await webhook(event("subscription.canceled", { ...sub("canceled"), current_period_end_date: new Date(Date.now() - 86_400_000).toISOString() }));

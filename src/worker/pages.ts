@@ -7,9 +7,9 @@ import type { WorkspaceRole } from "./directory.ts";
 import type { FrameBoot, Role, ShellBoot } from "../shared/protocol.ts";
 import { PRODUCT } from "../shared/brand.ts";
 import { relativeTime } from "../shared/time.ts";
-import { PLANS } from "./plans.ts";
+import { PLANS, type PaidPlanId } from "./plans.ts";
 import type { Listing } from "./listing.ts";
-import { TEAM_PRICE } from "./billing.ts";
+import { PRICES } from "./billing.ts";
 import demos from "./demos.json";
 import demoLinks from "../../demo/links.json";
 
@@ -353,7 +353,7 @@ function publicHead(brand: Brand, path: string, description: string, extra = "")
 }
 
 /** What the front page says about the product to search engines: only what's true (no ratings or reviews). */
-function appJsonLd(brand: Brand, pricing: boolean): string {
+function appJsonLd(brand: Brand, pricing: boolean, personal: boolean): string {
   const app: Record<string, unknown> = {
     "@context": "https://schema.org",
     "@type": "WebApplication",
@@ -366,7 +366,14 @@ function appJsonLd(brand: Brand, pricing: boolean): string {
   if (pricing) {
     app.offers = [
       { "@type": "Offer", name: PLANS.free.label, price: "0", priceCurrency: "USD" },
-      { "@type": "Offer", name: PLANS.team.label, price: String(TEAM_PRICE.amount), priceCurrency: "USD", description: `per workspace a ${TEAM_PRICE.period}`, url: `${brand.apex}/pricing` },
+      ...(personal ? (["personal", "team"] as const) : (["team"] as const)).map((id) => ({
+        "@type": "Offer",
+        name: PLANS[id].label,
+        price: String(PRICES[id].amount),
+        priceCurrency: PRICES[id].currency,
+        description: `per workspace a ${PRICES[id].period}`,
+        url: `${brand.apex}/pricing`,
+      })),
     ];
   }
   return `<script type="application/ld+json">${scriptJson(app)}</script>\n`;
@@ -377,7 +384,7 @@ function appJsonLd(brand: Brand, pricing: boolean): string {
  * run it. Someone signed in also gets their account menu and a way to their
  * workspaces (/workspaces).
  */
-export function splashPage(brand: Brand, notice?: string, viewer?: { email: string; operator: boolean }, pricing = false, selfServe = false): Response {
+export function splashPage(brand: Brand, notice?: string, viewer?: { email: string; operator: boolean }, pricing = false, selfServe = false, personal = false): Response {
   const fact = (title: string, body: string, points: string[]) =>
     `<div class="splash-fact"><h3>${escapeHtml(title)}</h3><p class="muted">${escapeHtml(body)}</p><ul class="splash-facts">${points.map((x) => `<li>${x}</li>`).join("")}</ul></div>`;
   const host = brand.apex.replace(/^https?:\/\//, "") || PRODUCT;
@@ -465,7 +472,7 @@ bun run deploy</code></pre></div>
 <footer class="splash-foot muted">${pricing ? `<a href="/pricing">Pricing</a> · ` : ""}${PRINCIPLES ? `<a href="${PRINCIPLES}">Principles</a> · ` : ""}<a href="${REPO}">GitHub</a> · <a href="${REPO}/blob/main/docs/guide.md">Agent guide</a> · <a href="${REPO}/blob/main/docs/AUTOMATIONS.md">Automations</a> · <a href="${REPO}/blob/main/src/kit/CATALOG.md">Components</a> · <a href="${REPO}/blob/main/docs/DESIGN.md">Design</a> · <a href="${REPO}/blob/main/docs/DEPLOY.md">Deploy guide</a> · <a href="${REPO}/blob/main/LICENSE.md">License</a> · <a href="/help">Help</a> · <a href="/privacy">Privacy</a> · <a href="/terms">Terms</a> · <a href="/security">Security and data</a> · ${viewer ? `<a href="/workspaces">Your workspaces</a>` : `<a href="/login">Sign in</a>`}</footer>
 </main>`,
     {},
-    publicHead(brand, "/", DESCRIPTION, appJsonLd(brand, pricing)),
+    publicHead(brand, "/", DESCRIPTION, appJsonLd(brand, pricing, personal)),
   );
 }
 
@@ -532,12 +539,24 @@ export function workspacesPage(
   notice?: string,
   /** Billing is on: admins get a way to each workspace's plan, so the pricing page's upgrade leads somewhere. */
   billing = false,
+  /** The plan chosen on the pricing page: carried to the workspace's settings, which points at its button. */
+  wanted: PaidPlanId | null = null,
 ): Response {
+  const want = wanted ? `?plan=${wanted}` : "";
+  const choose = wanted && billing
+    ? `<p class="notice ok">${
+        workspaces.some((w) => w.role === "admin")
+          ? `Choose the workspace to put on ${PLANS[wanted].label}: open its Plan and billing${create && !create.full ? ", or make a new workspace below" : ""}.`
+          : create && !create.full
+            ? `Make a workspace below, then choose ${PLANS[wanted].label} in its settings.`
+            : `${PLANS[wanted].label} is bought from a workspace's settings by one of its admins.`
+      }</p>`
+    : "";
   const rows = workspaces
     .map(
       (w) =>
         `<li><a href="${escapeHtml(w.url)}/"><span class="title">${escapeHtml(w.name)}</span><span class="meta">${escapeHtml(new URL(w.url).hostname)} · ${w.role}${w.suspended ? " · suspended" : ""}</span></a>${
-          billing && w.role === "admin" ? `<a class="row-link" href="${escapeHtml(w.url)}/settings#plan-and-billing" aria-label="Plan and billing for ${escapeHtml(w.name)}">Plan and billing</a>` : ""
+          billing && w.role === "admin" ? `<a class="row-link" href="${escapeHtml(w.url)}/settings${want}#plan-and-billing" aria-label="Plan and billing for ${escapeHtml(w.name)}">Plan and billing</a>` : ""
         }</li>`,
     )
     .join("");
@@ -547,12 +566,12 @@ export function workspacesPage(
   const admin = operator ? `<p class="archived-link"><a href="/admin">Operator console</a></p>` : "";
   return page(
     `Your workspaces · ${PRODUCT}`,
-    `${topBar(brand, `${avatar(email, brand, "account", { operator })}${ACCOUNT_SCRIPT}`)}<main class="content">${notice ? `<p class="notice ok" role="status">${escapeHtml(notice)}</p>` : ""}${body}${create ? createForm(create) : ""}${admin}</main>${POLICY_FOOTER}`,
+    `${topBar(brand, `${avatar(email, brand, "account", { operator })}${ACCOUNT_SCRIPT}`)}<main class="content">${notice ? `<p class="notice ok" role="status">${escapeHtml(notice)}</p>` : ""}${choose}${body}${create ? createForm(create, wanted) : ""}${admin}</main>${POLICY_FOOTER}`,
   );
 }
 
 /** Make a Free workspace (self-serve). Posts back to /workspaces. */
-function createForm(c: { error?: string; name?: string; slug?: string; suffix: string; full?: boolean }): string {
+function createForm(c: { error?: string; name?: string; slug?: string; suffix: string; full?: boolean }, wanted: PaidPlanId | null = null): string {
   const free = PLANS.free.limits;
   if (c.full) {
     return `<section class="card-section create-workspace"><h2>Create a workspace</h2><p class="muted">We've opened as many new workspaces as we can today. Come back tomorrow, or ask someone with a workspace to add you.</p></section>`;
@@ -563,7 +582,7 @@ function createForm(c: { error?: string; name?: string; slug?: string; suffix: s
 <h2>Create a workspace</h2>
 <p class="muted">A workspace is where your agent publishes artifacts for you and your team. It's free for up to ${free.artifacts} artifacts (archived ones included), ${free.members} members and ${Math.round((free.bytes ?? 0) / 1024 / 1024)} MB; people you share artifacts with never need an account or a plan.</p>
 ${c.error ? `<p class="notice error" role="alert" id="create-error">${escapeHtml(c.error)}</p>` : ""}
-<form method="post" action="/workspaces" class="create-form">
+<form method="post" action="/workspaces" class="create-form">${wanted ? `<input type="hidden" name="plan" value="${wanted}">` : ""}
 <label class="field"><span>Name</span><input class="input" name="name"${desc} required maxlength="80" autocomplete="organization" value="${escapeHtml(c.name ?? "")}" placeholder="Acme"></label>
 <label class="field"><span>Address</span><span class="slug-row"><input class="input" name="slug"${desc} required pattern="[a-z][a-z0-9\\-]{1,30}[a-z0-9]" maxlength="32" autocapitalize="none" spellcheck="false" value="${escapeHtml(c.slug ?? "")}" placeholder="acme"><span class="muted slug-suffix">${escapeHtml(c.suffix)}</span></span></label>
 <label class="check"><input type="checkbox" name="terms"${desc} required> <span>I agree to the <a href="/terms">terms</a> and <a href="/privacy">privacy policy</a>.</span></label>
@@ -652,15 +671,29 @@ export function continuePage(location: string, headers: Headers = new Headers())
 
 export type PolicyKind = "privacy" | "terms" | "security";
 
-export const POLICY_UPDATED = "2026-10-28";
+export const POLICY_UPDATED = "2026-11-26";
 
-/** Plans and prices (only while billing is on). A workspace pays; people you share with never do. */
-export function pricingPage(brand: Brand, selfServe: boolean, viewer?: { email: string; operator: boolean }): Response {
+/**
+ * Plans and prices (only while billing is on). A workspace pays; people you share with never do.
+ * `personal`: Personal is sold here (its product is set up). It is then the plan the page leads with.
+ */
+export function pricingPage(brand: Brand, selfServe: boolean, viewer?: { email: string; operator: boolean }, personal = false): Response {
   const free = PLANS.free.limits;
-  const team = PLANS.team.limits;
   const gb = (b: number) => (b >= 1024 ** 3 ? `${b / 1024 ** 3} GB` : `${Math.round(b / 1024 / 1024)} MB`);
+  const n = (v: number) => v.toLocaleString("en-US");
   const plan = (name: string, price: string, blurb: string, points: string[], cta: string) =>
     `<div class="splash-card pricing-card"><h2>${name}</h2><p class="pricing-price">${price}</p><p class="muted">${blurb}</p><ul>${points.map((x) => `<li>${x}</li>`).join("")}</ul>${cta}</div>`;
+  const paid = (id: PaidPlanId, blurb: string, first: string, primary: boolean) => {
+    const l = PLANS[id].limits;
+    return plan(
+      PLANS[id].label,
+      `$${PRICES[id].amount} <span class="muted">/ workspace / ${PRICES[id].period}</span>`,
+      blurb,
+      [first, `${gb(l.bytes!)} of storage, ${n(l.changesPerDay!)} saves, ${n(l.checksPerDay)} render checks and ${n(l.emailsPerDay)} emails a day`, INCLUDED],
+      `<a class="button${primary ? "" : " secondary"}" href="/workspaces?plan=${id}">Get ${PLANS[id].label}</a>`,
+    );
+  };
+  const INCLUDED = "Guests, approvals, forms, comments and MCP events included (storage, size and rate limits apply)";
   const account = viewer
     ? `<a class="button small secondary" href="/workspaces">Your workspaces</a>${avatar(viewer.email, brand, "account", { operator: viewer.operator })}${ACCOUNT_SCRIPT}`
     : `<a class="button small secondary" href="/login">Sign in</a>`;
@@ -669,33 +702,45 @@ export function pricingPage(brand: Brand, selfServe: boolean, viewer?: { email: 
     `${topBar(brand, account)}<main class="splash pricing">
 <section class="splash-hero"><h1>Pricing</h1>
 <p class="splash-lede muted">A workspace pays, once, however many people read its artifacts. Guests, the people you share with, never need an account or a plan.</p></section>
-<section class="splash-grid pricing-grid">
-${plan("Free", `$0 <span class="muted">/ workspace</span>`, "For trying it out, or a small personal workspace.", [
+<section class="splash-grid pricing-grid${personal ? " pricing-grid-3" : ""}">
+${plan("Free", `$0 <span class="muted">/ workspace</span>`, personal ? "For trying it out." : "For trying it out, or a small personal workspace.", [
   `${free.artifacts} artifacts (archived ones count; delete to make room) and ${free.members} members`,
   `${gb(free.bytes!)} of storage, ${free.changesPerDay} saves, ${free.checksPerDay} render checks and ${free.emailsPerDay} emails a day (${free.inviteEmailsPerDay} kept for invitations and shares)`,
-  "Guests, approvals, forms, comments and MCP events included (storage, size and rate limits apply)",
+  INCLUDED,
 ], selfServe ? `<a class="button secondary" href="/workspaces">Start free</a>` : `<p class="muted small">New workspaces are by invitation for now.</p>`)}
-${plan("Team", `$${TEAM_PRICE.amount} <span class="muted">/ workspace / ${TEAM_PRICE.period}</span>`, "For a team that publishes and decides with its agents every day.", [
-  "No limit on the number of artifacts or members (storage and daily limits apply)",
-  `${gb(team.bytes!)} of storage, ${team.changesPerDay!.toLocaleString("en-US")} saves, ${team.checksPerDay.toLocaleString("en-US")} render checks and ${team.emailsPerDay.toLocaleString("en-US")} emails a day`,
-  "Guests, approvals, forms, comments and MCP events included (storage, size and rate limits apply)",
-], `<a class="button" href="/workspaces">Choose a workspace to upgrade</a>`)}
+${personal ? paid("personal", "For one person who publishes with their agent.", "No limit on the number of artifacts, for one member (storage and daily limits apply)", true) : ""}
+${paid(
+  "team",
+  "For a team that publishes and decides with its agents every day.",
+  personal ? "Everything in Personal, for as many members as you like (storage and daily limits apply)" : "No limit on the number of artifacts or members (storage and daily limits apply)",
+  !personal,
+)}
 </section>
 <section class="pricing-notes muted">
 <p><strong>No lock-in.</strong> Admins can download the latest backup of their workspace from its settings, in a <a href="${REPO}/blob/main/docs/EXPORT.md">documented format</a>, and ask for a fresh one once an hour. The <a href="${REPO}">source</a> runs on your own Cloudflare account.</p>
-<p>The person who pays can <strong>cancel any time</strong> from the workspace's settings. Team stays until the end of the period you paid for, then the workspace moves to Free and keeps everything.</p>
+<p>The person who pays can <strong>cancel any time</strong> from the workspace's settings. The plan stays until the end of the period you paid for, then the workspace moves to Free and keeps everything.</p>
+${personal ? `<p><strong>Change plan any time</strong> from the workspace's settings, and it takes effect at once. ${PLAN_CHANGE_TERMS} Personal is for one member, so a workspace with more moves to it once the others are removed. A workspace over its new plan's limits keeps everything; it only can't add more until it's back under them.</p>` : ""}
 <p>Payments are handled by Creem, our merchant of record: they're the seller on your invoice and handle sales tax and VAT. Prices are in US dollars, plus tax where it applies. See the <a href="/terms">terms</a> for refunds.</p>
 <p>To keep throwaway workspaces from being used for spam, a new Free workspace's first day has no public links and only a few invitation and share emails. Sharing with people works from the start.</p>
 </section>
 <footer class="splash-foot muted"><a href="/help">Help</a> · <a href="/privacy">Privacy</a> · <a href="/terms">Terms</a> · <a href="/security">Security and data</a></footer>
 </main>`,
     {},
-    publicHead(brand, "/pricing", `${PRODUCT} pricing: Free for small workspaces, Team at $${TEAM_PRICE.amount} a workspace a month. Guests are always free.`),
+    publicHead(
+      brand,
+      "/pricing",
+      personal
+        ? `${PRODUCT} pricing: Free to start, Personal at $${PRICES.personal.amount} a month for one person, Team at $${PRICES.team.amount} a month for a whole team. Guests are always free.`
+        : `${PRODUCT} pricing: Free for small workspaces, Team at $${PRICES.team.amount} a workspace a month. Guests are always free.`,
+    ),
   );
 }
 
+/** What moving between paid plans costs: said on the pricing page, in the terms and in settings. */
+export const PLAN_CHANGE_TERMS = "Moving to a bigger plan charges the difference for the rest of the period now; moving to a smaller one refunds the unused part.";
+
 /** Privacy, terms, and security and data: what this hosted instance does with your data and expects of you. */
-export function policyPage(kind: PolicyKind, brand: Brand, contact: string, paid = false): Response {
+export function policyPage(kind: PolicyKind, brand: Brand, contact: string, paid = false, personal = false): Response {
   const mail = contact ? `<a href="mailto:${escapeHtml(contact)}">${escapeHtml(contact)}</a>` : "the operator";
   const sections: Record<PolicyKind, { title: string; body: string }> = {
     privacy: {
@@ -779,12 +824,13 @@ export function policyPage(kind: PolicyKind, brand: Brand, contact: string, paid
 <h2>Plans and prices</h2>
 ${
   paid
-    ? `<p>Each workspace is on Free or Team. Free is free, with limits on artifacts, members, storage, and saves and emails a day, listed on the <a href="/pricing">pricing page</a> and in workspace settings. Team is $${TEAM_PRICE.amount} a ${TEAM_PRICE.period} per workspace, with more room. People you share artifacts with as guests never need a plan. To limit abuse, a new Free workspace can't turn on public links in its first day, and sends only a few invitation and share emails until then.</p>
-<p>Moving a workspace to Free keeps everything in it; past Free's limits, nothing new can be added until it's back under them or on Team again. We'll tell workspace admins at least 30 days before a price or limit change that affects them, and a new price applies from the first billing period after that. Workspaces made before paid plans began keep the plan they had unless we've told their admins 30 days ahead.</p>`
+    ? `<p>Each workspace is on ${personal ? "Free, Personal or Team" : "Free or Team"}. Free is free, with limits on artifacts, members, storage, and saves and emails a day, listed on the <a href="/pricing">pricing page</a> and in workspace settings. ${personal ? `Personal is $${PRICES.personal.amount} a ${PRICES.personal.period} per workspace, for one member, with no limit on artifacts; ` : ""}Team is $${PRICES.team.amount} a ${PRICES.team.period} per workspace, for any number of members, with more room. People you share artifacts with as guests never need a plan. To limit abuse, a new Free workspace can't turn on public links in its first day, and sends only a few invitation and share emails until then.</p>
+${personal ? `<p>The person who pays can move a workspace between Personal and Team from its settings, and the change takes effect at once. ${PLAN_CHANGE_TERMS} Personal is for one member, so a workspace moves to it only once it has one.</p>
+` : ""}<p>Moving a workspace to a smaller plan keeps everything in it; past that plan's limits, nothing new can be added until it's back under them or on a bigger plan again. We'll tell workspace admins at least 30 days before a price or limit change that affects them, and a new price applies from the first billing period after that. Workspaces made before paid plans began keep the plan they had unless we've told their admins 30 days ahead.</p>`
     : `<p>${PRODUCT} is free while it's in early access. If we introduce paid plans, workspace admins hear about it at least 30 days before anything they use costs money, and nothing is charged without their agreement. People you share artifacts with as guests won't need a paid plan.</p>`
 }
 <h2>Payments and refunds</h2>
-<p>${paid ? "Team is" : "When paid plans are offered, they're"} sold by Creem, our merchant of record, which processes the payment and handles sales tax and VAT; their <a href="https://www.creem.io/buyer-terms">buyer terms</a> cover the purchase itself. A paid plan renews each period until the person who pays cancels it from the workspace's settings, and stays in place until the end of the period already paid for. If a payment fails, the workspace keeps Team for up to 14 days after its period ends while the card is retried, then moves to Free. If you were charged by mistake, or ask within 14 days of a workspace's first payment, we'll refund it in full: email us. Nothing here limits rights the law gives you.</p>
+<p>${paid ? "Paid plans are" : "When paid plans are offered, they're"} sold by Creem, our merchant of record, which processes the payment and handles sales tax and VAT; their <a href="https://www.creem.io/buyer-terms">buyer terms</a> cover the purchase itself. A paid plan renews each period until the person who pays cancels it from the workspace's settings, and stays in place until the end of the period already paid for. If a payment fails, the workspace keeps its plan for up to 14 days after its period ends while the card is retried, then moves to Free. If you were charged by mistake, or ask within 14 days of a workspace's first payment, we'll refund it in full: email us. Nothing here limits rights the law gives you.</p>
 <h2>The source code</h2>
 <p>The software behind ${PRODUCT} is published under the <a href="${REPO}/blob/main/LICENSE.md">Functional Source License</a>, which covers the code itself. These terms cover the hosted service.</p>
 <h2>The service</h2>
@@ -849,7 +895,7 @@ export function helpPage(brand: Brand, contact: string): Response {
 <li><strong>Do people I share with need an account or a plan?</strong> No. They sign in with a code we email them, and guests are always free.</li>
 <li><strong>My agent can't connect.</strong> Settings shows the steps for each client. If the sign-in window doesn't open, an agent token from settings works in any client.</li>
 <li><strong>I didn't get the sign-in email.</strong> Check spam for a message from ${PRODUCT}; codes last 10 minutes. You can also save a passkey in <a href="/me">your account</a> to skip the code.</li>
-<li><strong>Billing.</strong> Team is billed per workspace by Creem, who handles tax. Change the card, get invoices or cancel from workspace settings → Manage billing. Canceling keeps Team until the end of the period you paid for.</li>
+<li><strong>Billing.</strong> Paid plans are billed per workspace by Creem, who handles tax. Change plan from workspace settings; change the card, get invoices or cancel from Manage billing there. Canceling keeps the plan until the end of the period you paid for.</li>
 <li><strong>Leaving or deleting.</strong> Leave a workspace from its Notifications page (your avatar menu inside the workspace); delete your account from <a href="/me">your account</a>. Admins can download everything from workspace settings first.</li>
 </ul>
 <h2>Contact us</h2>

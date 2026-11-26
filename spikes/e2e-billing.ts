@@ -1,12 +1,17 @@
 // Billing end to end against a deployed stage with BILLING=on, in a throwaway
 // workspace: sends signed webhook events the way Creem does and checks the
-// workspace moves between Free and Team. With real Creem test keys
-// (CREEM_API_KEY=creem_test_…) it also creates a sandbox checkout.
-// Usage: CREEM_WEBHOOK_SECRET=<the stage's secret> STAGE=<name> bun spikes/e2e-billing.ts
+// workspace moves between Free, Personal and Team. With real Creem test keys
+// (CREEM_API_KEY=creem_test_…) it also creates sandbox checkouts.
+// Usage: CREEM_WEBHOOK_SECRET=<the stage's secret> CREEM_PRODUCT_ID=<its Team product>
+//   [CREEM_PERSONAL_PRODUCT_ID=<its Personal product>] STAGE=<name> bun spikes/e2e-billing.ts
+// It raises one bad-signature alert on the stage it runs against (the refused request below).
 import { apex, check, cookieFor, finish, operator, origin, owner, setup, slug } from "./e2e-lib.ts";
 
 const secret = process.env.CREEM_WEBHOOK_SECRET;
 if (!secret) throw new Error("set CREEM_WEBHOOK_SECRET to the deployed stage's webhook secret");
+// A subscription's product says which plan it pays for, so the events here must name the stage's own products.
+const products = { team: process.env.CREEM_PRODUCT_ID, personal: process.env.CREEM_PERSONAL_PRODUCT_ID };
+if (!products.team) throw new Error("set CREEM_PRODUCT_ID to the deployed stage's Team product");
 await setup();
 await operator(`/workspaces/${slug}/plan`, { plan: "free" });
 
@@ -22,8 +27,18 @@ async function send(payload: unknown, signature?: string) {
 const cookie = await cookieFor(owner);
 const settings = async () => (await (await fetch(`${origin}/api/settings`, { headers: { Cookie: cookie } })).json()) as any;
 const subId = `sub_e2e_${slug}`;
-const sub = (status: string, metadata: Record<string, unknown> = {}) => ({ id: subId, object: "subscription", customer: { id: `cust_${slug}` }, status, current_period_end_date: new Date(Date.now() + 30 * 86_400_000).toISOString(), metadata });
 let t = Date.now();
+// `updated_at` moves forward with each one made, as it does at Creem.
+const sub = (status: string, metadata: Record<string, unknown> = {}, plan: "team" | "personal" = "team") => ({
+  id: subId,
+  object: "subscription",
+  product: { id: products[plan], object: "product" },
+  customer: { id: `cust_${slug}` },
+  status,
+  current_period_end_date: new Date(Date.now() + 30 * 86_400_000).toISOString(),
+  updated_at: new Date(++t).toISOString(),
+  metadata,
+});
 const ev = (eventType: string, object: unknown) => ({ id: `evt_${slug}_${++t}`, eventType, created_at: t, object });
 
 const pricing = await fetch(`${apex}/pricing`);
@@ -51,9 +66,40 @@ check("canceling keeps Team until the paid period ends", canceled.body?.plan ===
 await send(ev("subscription.canceled", { ...sub("canceled"), current_period_end_date: new Date(Date.now() - 1000).toISOString() }));
 check("once the period is over, it's Free", (await settings()).plan.id === "free");
 
-// A real sandbox checkout, when the stage has Creem test keys.
-const checkout = await fetch(`${origin}/api/settings/billing/checkout`, { method: "POST", headers: { Cookie: cookie, Origin: origin, "Content-Type": "application/json" }, body: "{}" });
-const out = (await checkout.json().catch(() => null)) as any;
-if (before.billing?.ready) check("a sandbox checkout link comes back from Creem", checkout.status === 200 && /^https:\/\//.test(out?.url ?? ""), out);
-else check("without keys, checkout says payments aren't set up", checkout.status === 503, out);
+// A real sandbox checkout for each plan sold here, when the stage has Creem test keys.
+const post = async (path: string, body: unknown) => {
+  const res = await fetch(`${origin}${path}`, { method: "POST", headers: { Cookie: cookie, Origin: origin, "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  return { status: res.status, body: (await res.json().catch(() => null)) as any };
+};
+const links: string[] = [];
+for (const plan of ["personal", "team"] as const) {
+  const state = before.billing?.plans?.[plan];
+  if (plan === "personal" && !state?.offered) continue;
+  const out = await post("/api/settings/billing/checkout", { plan });
+  if (state?.ready) check(`a sandbox checkout link for ${plan} comes back from Creem`, out.status === 200 && /^https:\/\//.test(out.body?.url ?? ""), out);
+  else check(`without keys, checkout for ${plan} says payments aren't set up`, out.status === 503, out);
+  if (out.body?.url) links.push(out.body.url);
+}
+if (links.length === 2) check("each plan gets its own checkout", links[0] !== links[1], links);
+
+// Personal: the product decides the plan, one member, and changes made at Creem are followed.
+if (products.personal && before.billing?.plans?.personal?.offered) {
+  const personal = await send(ev("subscription.paid", sub("active", { workspace: slug }, "personal")));
+  const onPersonal = await settings();
+  check("a payment for the Personal product puts it on Personal", personal.body?.plan === "personal" && onPersonal.plan.id === "personal" && onPersonal.billing?.subscription?.plan === "personal", { personal, plan: onPersonal.plan });
+  const member = await post("/api/settings/members", { email: `second-${slug}@example.com`, role: "member" });
+  check("Personal allows one member", member.status >= 400 && /Personal plan/.test(member.body?.error ?? ""), member);
+  const old = sub("active", {}, "personal");
+  const moved = await send(ev("subscription.update", sub("active", {}, "team")));
+  check("a plan changed at Creem is followed", moved.body?.plan === "team" && (await settings()).plan.id === "team", moved);
+  // Resent by hand from Creem's dashboard: a new event id and time around the subscription as it was.
+  await send(ev("subscription.paid", old));
+  check("an old event resent as new changes nothing", (await settings()).plan.id === "team");
+  const down = await send(ev("subscription.update", sub("active", {}, "personal")));
+  check("and back to Personal", down.body?.plan === "personal" && (await settings()).plan.id === "personal", down);
+  const stranger = await send(ev("subscription.update", { ...sub("active"), product: { id: "prod_not_ours" } }));
+  check("a product that isn't ours changes nothing", stranger.status === 200 && (await settings()).plan.id === "personal", stranger);
+  await send(ev("subscription.canceled", { ...sub("canceled", {}, "personal"), current_period_end_date: new Date(Date.now() - 1000).toISOString() }));
+  check("canceled with its period over, it's Free again", (await settings()).plan.id === "free");
+}
 await finish();

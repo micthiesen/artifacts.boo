@@ -970,6 +970,9 @@ body:has(> main.splash) > .bar { z-index: 2; }
 .profile select { max-width: 100%; min-width: 0; }
 .watches { table-layout: fixed; }
 .pricing-grid { margin-top: 2rem; }
+/* Three plans: side by side only where each card keeps a readable measure, otherwise one column (never two and an orphan). */
+.pricing-grid-3 { grid-template-columns: 1fr; gap: 1.25rem; }
+@media (min-width: 60rem) { .pricing-grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 .pricing-card { display: flex; flex-direction: column; }
 .pricing-card ul { flex: 1; margin-bottom: 1.2rem; }
 .pricing-card .button { align-self: flex-start; }

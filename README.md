@@ -8,7 +8,7 @@ Durable Object database, all on one Cloudflare Worker.
 
 ## Try the hosted service
 
-1. [Create a Free workspace](https://artifacts.boo/) with no card required. Free includes 20 artifacts and 3 members; guests are free. See [pricing](https://artifacts.boo/pricing) for all limits and the Team plan.
+1. [Create a Free workspace](https://artifacts.boo/) with no card required. Free includes 20 artifacts and 3 members; guests are free. See [pricing](https://artifacts.boo/pricing) for all limits and the Personal and Team plans.
 2. Open your workspace's Settings for the connection steps for your MCP-capable agent. Each workspace has its own MCP address.
 3. Ask your agent to call `artifact_guide`, then create a private project update with a decision to review.
 

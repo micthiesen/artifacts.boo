@@ -61,7 +61,15 @@ const pages: [string, string, string | undefined][] = [
   ["comments drawer with reactions", `${origin}/a/${id}#thread=${thread?.id}`, ownerHere],
 ];
 // The pricing page exists only while billing is on.
-if ((await fetch(`${apex}/pricing`)).status === 200) pages.push(["pricing", `${apex}/pricing`, undefined]);
+if ((await fetch(`${apex}/pricing`)).status === 200) {
+  // On Free, settings offers each paid plan; a plan chosen on the pricing page is carried by "your workspaces".
+  await operator(`/workspaces/${slug}/plan`, { plan: "free" });
+  pages.push(
+    ["pricing", `${apex}/pricing`, undefined],
+    ["workspace settings on Free, plan chosen", `${origin}/settings?plan=personal`, ownerHere],
+    ["your workspaces, plan chosen", `${apex}/workspaces?plan=personal`, ownerApex],
+  );
+}
 for (const [name, url, cookie] of pages) {
   const r = await operator("/layout", { url, ...(cookie ? { cookie } : {}) });
   const detail = r.error ?? `${r.scrollWidth}px wide at ${r.width}px: ${r.offenders?.map((o: any) => `${o.el} → ${o.right}px “${o.text}”`).join("; ")}`;

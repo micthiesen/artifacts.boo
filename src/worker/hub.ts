@@ -13,7 +13,7 @@ import { diffBlocks, type BlockInfo } from "./blocks.ts";
 import { composeMessage, mentionedEmails, type OutboxItem } from "./notifications.ts";
 import { isBlockedHost, sendToChannel, type NotifyEnv } from "./notify.ts";
 import { DEFAULT_PLAN, PLANS, isPlan, type PlanId } from "./plans.ts";
-import { TEAM_PRICE } from "./billing.ts";
+import { PRICES, productFor, type BillingEnv } from "./billing.ts";
 import { cleanQuery, listing, queryWords, type InContent } from "./listing.ts";
 import { ops, type OpsEvent } from "./ops.ts";
 import { fixAnswered, resolveUnanswered, SUPPORT_SLUG, type SupportEnv } from "./support.ts";
@@ -138,6 +138,7 @@ export type Job = BackupJob | RestoreJob | ImportJob;
 type QueuedJob = { kind: "backup" } | { kind: "restore"; run: string };
 
 export type HubEnv = CheckEnv &
+  Pick<BillingEnv, "CREEM_PERSONAL_PRODUCT_ID"> &
   NotifyEnv & {
     DIRECTORY: DurableObjectNamespace;
     /** The operator's addresses, for ops alerts. */
@@ -579,7 +580,7 @@ export class Workspace extends DurableObject {
   plan() {
     const id = this.planId();
     const { artifacts, members } = this.stats();
-    const until = id === "team" ? this.setting("plan_until") : null;
+    const until = id !== "free" ? this.setting("plan_until") : null;
     const free = Boolean(this.setting("free_team"));
     return { id, label: PLANS[id].label, limits: PLANS[id].limits, usage: { artifacts, members, bytes: this.storedBytes() }, until: free ? null : until, free };
   }
@@ -596,7 +597,7 @@ export class Workspace extends DurableObject {
   async setPlan(id: PlanId, until: string | null = null) {
     if (!isPlan(id)) throw new HubError(`unknown plan ${id}`);
     this.setSetting("plan", id);
-    this.setSetting("plan_until", id === "team" ? until : null);
+    this.setSetting("plan_until", id !== "free" ? until : null);
     await this.directory().recordStats(this.info().slug, this.stats());
     return this.plan();
   }
@@ -703,8 +704,19 @@ export class Workspace extends DurableObject {
     const fix =
       kind === "changesPerDay"
         ? "Try again later: changes save again as the oldest of today's fall out of the last 24 hours."
-        : `A workspace admin can ${kind === "members" ? "remove a member" : "delete artifacts nobody needs"}${this.planId() === "free" ? `, or move the workspace to Team in its settings (${TEAM_PRICE.amount} USD a ${TEAM_PRICE.period})` : ""}. (Agents: tell the person rather than deleting anything to make room.)`;
+        : `A workspace admin can ${kind === "members" ? "remove a member" : "delete artifacts nobody needs"}${this.upgradeHint(kind)}. (Agents: tell the person rather than deleting anything to make room.)`;
     throw new HubError(`This workspace is on the ${plan.label} plan, which allows ${limit}. ${fix}`);
+  }
+
+  /** The plan with room for what was refused, for the limit message: Personal has no artifact cap, Team no member cap. */
+  private upgradeHint(kind: "artifacts" | "bytes" | "members" | "changesPerDay"): string {
+    const id = this.planId();
+    const price = (p: "personal" | "team") => `${PRICES[p].amount} USD a ${PRICES[p].period}`;
+    if (id === "team") return "";
+    if (id === "personal") return `, or move the workspace to Team in its settings (${price("team")})`;
+    // Personal is one member, so it never helps a member limit; and it's only named where it's sold.
+    if (kind === "members" || !productFor(this.hubEnv, "personal")) return `, or move the workspace to Team in its settings (${price("team")})`;
+    return `, or move the workspace to Personal (${price("personal")}) or Team (${price("team")}) in its settings`;
   }
 
   /** Deletes everything this workspace stores, including its backups. */
@@ -1374,7 +1386,7 @@ export class Workspace extends DurableObject {
     const until = on ? (input.publicUntil === undefined ? keep : publicExpiry(input.publicUntil)) : null;
     // A brand-new Free workspace is where a phishing page would come from: no public links on its first day.
     if (on && !isPublic(current) && this.newFree()) {
-      throw new HubError("Public links open after a new Free workspace's first day. Share with people by email until then, or move the workspace to Team.");
+      throw new HubError("Public links open after a new Free workspace's first day. Share with people by email until then, or move the workspace to a paid plan.");
     }
     for (const s of input.add ?? []) {
       if (!isValidPrincipal(sharePrincipal(String(s.email ?? "")))) throw new HubError(`"${s.email}" is not an email address, @domain or workspace`);

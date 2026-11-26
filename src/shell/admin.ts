@@ -4,7 +4,9 @@
 // list polls while one is running. Typed values are kept across re-renders
 // (keyed by data-key), and a failed action only shows its notice.
 
-type Stats = { artifacts: number; members: number; bytes: number; lastActivity: string | null; plan?: "free" | "team"; freeTeam?: boolean };
+import { PLANS, type PaidPlanId, type PlanId } from "../worker/plans.ts";
+
+type Stats = { artifacts: number; members: number; bytes: number; lastActivity: string | null; plan?: PlanId; freeTeam?: boolean };
 type Job = { kind: "backup" | "restore" | "import"; phase?: string; progress?: string; error?: string; startedAt: string };
 type Workspace = {
   slug: string;
@@ -18,7 +20,7 @@ type Workspace = {
   job: Job | null;
   /** Self-serve: who made it. */
   createdBy: string | null;
-  billing: { status: string; periodEnd: string | null; payerEmail: string | null; subscriptionId: string | null } | null;
+  billing: { status: string; periodEnd: string | null; payerEmail: string | null; subscriptionId: string | null; plan: PaidPlanId } | null;
 };
 type OpsEvent = { id: number; at: string; kind: string; slug: string | null; message: string; detail: Record<string, unknown> | null };
 type Notice = { tone: "ok" | "error"; text: string; signIn?: boolean };
@@ -237,13 +239,13 @@ function render() {
       h("h2", {}, h("a", { href: `${w.url}/` }, w.name), " ", h("span", { class: `chip${w.suspended ? " caution" : " positive"}` }, w.suspended ? "suspended" : "active")),
       h("p", { class: "muted small" }, `${new URL(w.url).hostname} · admins ${w.admins.join(", ") || "none"} · created ${w.createdAt.slice(0, 10)}${w.createdBy ? ` by ${w.createdBy} (self-serve)` : ""}`),
       ...(w.billing
-        ? [h("p", { class: "small" }, `Billing: ${w.billing.status}${w.billing.periodEnd ? `, period ends ${w.billing.periodEnd.slice(0, 10)}` : ""}${w.billing.payerEmail ? ` · paid by ${w.billing.payerEmail}` : ""}${w.billing.subscriptionId ? ` · ${w.billing.subscriptionId}` : ""}`)]
+        ? [h("p", { class: "small" }, `Billing: ${PLANS[w.billing.plan].label}, ${w.billing.status}${w.billing.periodEnd ? `, period ends ${w.billing.periodEnd.slice(0, 10)}` : ""}${w.billing.payerEmail ? ` · paid by ${w.billing.payerEmail}` : ""}${w.billing.subscriptionId ? ` · ${w.billing.subscriptionId}` : ""}`)]
         : []),
       h(
         "p",
         { class: "small" },
         s
-          ? `${s.freeTeam ? "Team (free)" : s.plan === "free" ? "Free" : "Team"} plan · ${s.artifacts} artifacts · ${s.members} members · ${size(s.bytes)} · last activity ${s.lastActivity ? stamp(s.lastActivity) : "none"} · stats from ${w.statsAt ? stamp(w.statsAt) : "never"}`
+          ? `${s.freeTeam ? "Team (free)" : PLANS[s.plan ?? "team"].label} plan · ${s.artifacts} artifacts · ${s.members} members · ${size(s.bytes)} · last activity ${s.lastActivity ? stamp(s.lastActivity) : "none"} · stats from ${w.statsAt ? stamp(w.statsAt) : "never"}`
           : "No stats yet.",
       ),
     );

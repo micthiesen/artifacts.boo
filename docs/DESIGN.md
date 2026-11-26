@@ -167,26 +167,31 @@ The number of workspaces is unbounded. If one artifact ever needs thousands of
 simultaneous writers, its live state moves to its own Durable Object; until
 then that is deliberately not built.
 
-## Plans and pricing (not built)
+## Plans and pricing
 
-The hosted service is free in early access; the terms promise admins 30
-days' notice before anything costs money, and guests never need a plan.
-Pricing plans are kept privately. Billing is built and off (`docs/BILLING.md`):
-Creem, a merchant of record, sells Team per workspace, and its signed
-webhooks set the workspace's plan.
+A workspace pays, and guests never need a plan. There are three plans
+(`src/worker/plans.ts`): Free, Personal ($10 a workspace a month) and Team
+($25). Creem, a merchant of record, sells the two paid plans as two
+products, and its signed webhooks set the workspace's plan from the product
+its subscription is on (`docs/BILLING.md`). The reasoning behind the prices
+is kept privately.
 
-A workspace has a plan (`src/worker/plans.ts`). Team caps only what one
-Durable Object can hold (5 GB of content, leaving room for history and the
-activity log under its 10 GB) and saves a day (5,000, which bounds render
-checks); Free also caps artifacts and members, with less storage, fewer
-saves and 50 emails a day (invitations, shares and notifications; Team
-keeps the 1,000 every workspace has). Whatever the plan, writes stop at 9.5 GB of database in use. The workspace enforces them on
+What separates the paid plans is members. Personal is one person publishing,
+read by anyone: one member, no artifact cap (the limit one person reaches
+first on Free), 2 GB and daily caps between Free's and Team's, which bound
+what a $10 workspace can cost. Team has no member limit, and caps only what
+one Durable Object can hold (5 GB of content, leaving room for history and
+the activity log under its 10 GB) and saves a day (5,000, which bounds
+render checks). Free caps artifacts (20) and members (3), with less storage,
+fewer saves and 50 emails a day (invitations, shares and notifications;
+Personal has 200, Team 1,000). Whatever the plan, writes stop at 9.5 GB of database in use. The workspace enforces them on
 writes and new members; deleting is always allowed, so a full workspace can
 make room, and someone joining by email domain past the member limit stays
-a guest. Existing and operator-made workspaces are on Team; the operator
-moves them. Self-serve signup is built but off (`SELF_SERVE`): someone
-signed in makes one Free workspace, agreeing to the current terms, with a
-daily cap across everyone.
+a guest. Moving to a smaller plan never removes anything or anyone: past
+the smaller plan's limits the workspace only stops adding. Operator-made
+workspaces are on Team unless the operator moves them. With self-serve
+signup (`SELF_SERVE`), someone signed in makes one Free workspace, agreeing
+to the current terms, with a daily cap across everyone.
 
 The code is under FSL-1.1-ALv2 (`LICENSE.md`): anyone may self-host it for
 their own organization, but not offer it as a competing hosted service, and

@@ -41,8 +41,8 @@ import { isTestAddress, sendCode, sendInvite } from "./mail.ts";
 import { ops } from "./ops.ts";
 import { approveAnnouncement, browserOf, caseUrl, openCase, placeOf, recordProductError, SUPPORT_SLUG, supportHub, SupportError, type CaseKind } from "./support.ts";
 import { publicMessage } from "./errors.ts";
-import { isPlan } from "./plans.ts";
-import { BillingError, billingOn, billingReady, planFor, portalLink, readEvent, startCheckout, subscriptionLive, subscriptionMayCharge, TEAM_PRICE, verifyWebhook } from "./billing.ts";
+import { isPaidPlan, isPlan, PAID_PLANS, PLAN_ORDER, PLANS, type PaidPlanId } from "./plans.ts";
+import { BillingError, billingOn, billingReady, cancelSubscription, changeSubscriptionPlan, fetchSubscription, planFor, planSold, portalLink, PRICES, productFor, productPlans, readEvent, startCheckout, subscriptionLive, subscriptionMayCharge, verifyWebhook, type BillingUpdate } from "./billing.ts";
 import { checkLayout } from "./layout.ts";
 import { exportRun, latestManifest } from "./snapshot.ts";
 import { DATA_TABLES } from "./tables.ts";
@@ -103,6 +103,7 @@ export type Env = {
   CREEM_API_KEY?: string;
   CREEM_WEBHOOK_SECRET?: string;
   CREEM_PRODUCT_ID?: string;
+  CREEM_PERSONAL_PRODUCT_ID?: string;
   /** Sender address for sign-in codes. */
   MAIL_FROM: string;
   /** Pushover application token shared by every user's Pushover channel. */
@@ -800,9 +801,12 @@ async function apex(request: Request, env: Env, ctx: ExecutionContext): Promise<
   const operator = viewer.email !== null && operatorEmails(env).has(viewer.email);
 
   // The front page is the same for everyone; signed in, it links to /workspaces.
-  if (path === "/") return indexable(splashPage(brand, url.searchParams.get("deleted") === "account" ? "Your account is deleted." : undefined, viewer.email ? { email: viewer.email, operator } : undefined, billingOn(env), env.SELF_SERVE === "on"));
+  if (path === "/") return indexable(splashPage(brand, url.searchParams.get("deleted") === "account" ? "Your account is deleted." : undefined, viewer.email ? { email: viewer.email, operator } : undefined, billingOn(env), env.SELF_SERVE === "on", Boolean(productFor(env, "personal"))));
   if (path === "/workspaces") {
-    if (!viewer.email) return Response.redirect(`${url.origin}/login?return=/workspaces`, 302);
+    // The plan chosen on the pricing page (Get Personal, Get Team) stays with them through sign-in and making a workspace.
+    const asked = url.searchParams.get("plan");
+    const wanted = billingOn(env) && isPaidPlan(asked) && productFor(env, asked) ? asked : null;
+    if (!viewer.email) return Response.redirect(`${url.origin}/login?return=${wanted ? encodeURIComponent(`/workspaces?plan=${wanted}`) : "/workspaces"}`, 302);
     const selfServe = env.SELF_SERVE === "on";
     const list = async () => (await directory(env).membershipsOf(viewer.email!)).map((w) => ({ ...w, url: workspaceOrigin(env, w.slug) }));
     // Once they've made their one workspace, there's no form to fill in only to be told no.
@@ -817,15 +821,17 @@ async function apex(request: Request, env: Env, ctx: ExecutionContext): Promise<
       const form = await request.formData().catch(() => new FormData());
       const name = String(form.get("name") ?? "").trim().slice(0, 80);
       const slug = String(form.get("slug") ?? "").trim().toLowerCase();
-      const made = await createOwnWorkspace(env, viewer.email, { name, slug, terms: form.get("terms") === "on" });
+      const chosen = form.get("plan");
+      const plan = billingOn(env) && isPaidPlan(chosen) && productFor(env, chosen) ? chosen : null;
+      const made = await createOwnWorkspace(env, viewer.email, { name, slug, terms: form.get("terms") === "on", plan });
       if ("location" in made) return continuePage(made.location);
-      const res = workspacesPage(viewer.email, await list(), operator, brand, await create({ error: made.error, name, slug }), undefined, billingOn(env));
+      const res = workspacesPage(viewer.email, await list(), operator, brand, await create({ error: made.error, name, slug }), undefined, billingOn(env), plan);
       return new Response(res.body, { status: 400, headers: res.headers });
     }
     const deleted = url.searchParams.get("deleted");
     const left = url.searchParams.get("left");
     const note = deleted ? `Deleted ${deleted.slice(0, 80)}.` : left ? `You left ${left.slice(0, 80)}.` : undefined;
-    return workspacesPage(viewer.email, await list(), operator, brand, await create(), note, billingOn(env));
+    return workspacesPage(viewer.email, await list(), operator, brand, await create(), note, billingOn(env), wanted);
   }
   if (path === "/login") return apexLogin(request, url, env, viewer, brand);
   if (path === "/login/passkey/options" && request.method === "POST") {
@@ -834,7 +840,7 @@ async function apex(request: Request, env: Env, ctx: ExecutionContext): Promise<
   }
   if (path === "/login/passkey" && request.method === "POST") return passkeyLogin(request, url, env);
   if (path === "/privacy" || path === "/terms" || path === "/security") {
-    return indexable(policyPage(path.slice(1) as PolicyKind, brand, contactEmail(env), billingOn(env)));
+    return indexable(policyPage(path.slice(1) as PolicyKind, brand, contactEmail(env), billingOn(env), Boolean(productFor(env, "personal"))));
   }
   if (path === "/report") return reportRoute(request, url, env, brand);
   if (path === "/help") return indexable(helpPage(brand, contactEmail(env)));
@@ -850,7 +856,7 @@ async function apex(request: Request, env: Env, ctx: ExecutionContext): Promise<
   if (path === "/inbox") return inboxRoute(request, url, env, viewer.email ? { email: viewer.email, operator } : null, brand);
   if (path === "/api/client-error" && request.method === "POST") return clientError(request, env);
   // Billing: the pricing page and the payment provider's webhook, only while billing is on.
-  if (path === "/pricing" && billingOn(env)) return indexable(pricingPage(brand, env.SELF_SERVE === "on", viewer.email ? { email: viewer.email, operator } : undefined));
+  if (path === "/pricing" && billingOn(env)) return indexable(pricingPage(brand, env.SELF_SERVE === "on", viewer.email ? { email: viewer.email, operator } : undefined, Boolean(productFor(env, "personal"))));
   if (path === "/api/billing/webhook" && request.method === "POST") return billingWebhook(request, env);
   if (path === "/logout" && request.method === "POST") {
     if (!sameOrigin(request, url)) return new Response("bad origin", { status: 403 });
@@ -858,7 +864,7 @@ async function apex(request: Request, env: Env, ctx: ExecutionContext): Promise<
   }
   // Where a workspace's Sign out lands: end the apex session too, so the next sign-in asks again.
   if (path === "/signed-out") {
-    const res = splashPage(brand, "You're signed out. Other workspaces you opened sign out separately.", undefined, billingOn(env), env.SELF_SERVE === "on");
+    const res = splashPage(brand, "You're signed out. Other workspaces you opened sign out separately.", undefined, billingOn(env), env.SELF_SERVE === "on", Boolean(productFor(env, "personal")));
     res.headers.append("Set-Cookie", clearSessionCookie());
     return res;
   }
@@ -950,6 +956,13 @@ async function steppingDownBlocker(env: Env, hub: HubApi, slug: string, email: s
   return null;
 }
 
+/** Personal is one member (guests never count): why this workspace can't be on it, or null if it can. */
+function personalBlocker(plan: PaidPlanId, members: number): string | null {
+  const max = PLANS[plan].limits.members;
+  if (max === null || members <= max) return null;
+  return `${PLANS[plan].label} is for one person, and this workspace has ${members} members. Remove the others first (what they own passes to whoever removes them, and artifacts shared with them by email stay shared), or choose Team.`;
+}
+
 /** Self-serve workspaces belong to whoever made them. */
 async function ownWorkspace(env: Env, slug: string, email: string): Promise<boolean> {
   const record = await directory(env).workspace(slug);
@@ -959,9 +972,12 @@ async function ownWorkspace(env: Env, slug: string, email: string): Promise<bool
 async function billingState(env: Env, slug: string) {
   const record = await directory(env).billing(slug);
   return {
-    ready: billingReady(env),
-    price: TEAM_PRICE,
-    subscription: record ? { status: record.status, periodEnd: record.periodEnd, manageable: Boolean(record.customerId), payer: record.payerEmail } : null,
+    // Each paid plan: its price, and whether it can be bought here (its product is set up).
+    plans: Object.fromEntries(PAID_PLANS.map((id) => [id, { label: PLANS[id].label, price: PRICES[id], ready: planSold(env, id), offered: Boolean(productFor(env, id)) }])) as Record<
+      PaidPlanId,
+      { label: string; price: (typeof PRICES)[PaidPlanId]; ready: boolean; offered: boolean }
+    >,
+    subscription: record ? { status: record.status, periodEnd: record.periodEnd, manageable: Boolean(record.customerId), payer: record.payerEmail, plan: record.plan } : null,
   };
 }
 
@@ -984,7 +1000,8 @@ async function billingWebhook(request: Request, env: Env): Promise<Response> {
   } catch {
     return Response.json({ error: "bad JSON" }, { status: 400 });
   }
-  const update = readEvent(payload);
+  const products = productPlans(env);
+  let update = readEvent(payload, products);
   if (!update) {
     // Events we don't act on are expected; one about a subscription we couldn't read isn't.
     const e = payload as { id?: string; eventType?: string; object?: Record<string, unknown> & { object?: string; subscription?: unknown } };
@@ -992,10 +1009,15 @@ async function billingWebhook(request: Request, env: Env): Promise<Response> {
     // Refunds and disputes don't change the plan by themselves: the operator decides (End billing in the console).
     if (type.startsWith("refund.") || type.startsWith("dispute.")) {
       const slug = await refundWorkspace(env, e?.object);
+      // Moving to a smaller plan refunds the unused part of the bigger one: expected, so it's logged without an alert.
+      if (type.startsWith("refund.") && slug && (await env.OAUTH_KV.get(`${PLAN_CHANGE_PREFIX}${slug}`).catch(() => null))) {
+        await ops(env, { kind: "billing_proration_refund", slug, message: `Creem refunded ${slug} the unused part of its previous plan after a plan change.`, detail: { eventId: e?.id }, alert: false });
+        return Response.json({ ignored: true });
+      }
       await ops(env, {
         kind: "billing_refund_or_dispute",
         slug,
-        message: `Creem sent ${type}${slug ? ` for ${slug}` : ""}. The plan hasn't changed: if Team should end now, use End billing in the operator console.`,
+        message: `Creem sent ${type}${slug ? ` for ${slug}` : ""}. The plan hasn't changed: if its paid plan should end now, use End billing in the operator console.`,
         detail: { eventId: e?.id, eventType: type },
         alert: true,
       });
@@ -1010,7 +1032,27 @@ async function billingWebhook(request: Request, env: Env): Promise<Response> {
     });
     return Response.json({ ignored: true });
   }
+  // Paying for a product that isn't one of ours here: nothing is granted, and the operator hears (a product id
+  // missing from this deployment's settings, or another product sold from the same Creem store).
+  if (!update.paid && update.workspace && ["active", "trialing", "paid"].includes(update.status)) {
+    await ops(env, {
+      kind: "billing_unknown_product",
+      slug: update.workspace,
+      message: `A subscription for ${update.workspace} is on Creem product ${update.productId ?? "(none named)"}, which this deployment doesn't sell. Its plan didn't change: set CREEM_PRODUCT_ID and CREEM_PERSONAL_PRODUCT_ID to this mode's products.`,
+      detail: { eventId: update.eventId, subscriptionId: update.subscriptionId, productId: update.productId },
+      alert: "billing_unknown_product",
+    });
+  }
   try {
+    // The subscription names two of our products that pay for different plans (Creem's own sample of
+    // subscription.update does): ask Creem which it is now. If it can't be asked the delivery fails, so its
+    // retry asks again rather than guessing a plan.
+    if (update.ambiguous && update.subscriptionId) {
+      const now = (await fetchSubscription(env, update.subscriptionId)) as Record<string, unknown>;
+      const settled = readEvent({ id: update.eventId, eventType: "subscription.update", created_at: update.at, object: { ...now, items: null } }, products);
+      if (!settled || settled.subscriptionId !== update.subscriptionId) throw new BillingError("The payment provider's answer about a subscription couldn't be read.");
+      update = { ...settled, workspace: settled.workspace ?? update.workspace, workspaceCreated: settled.workspaceCreated ?? update.workspaceCreated };
+    }
     return await applyBillingEvent(env, update);
   } catch (err) {
     // Creem retries a failed delivery for about a day; if it keeps failing, someone paid and nothing happened.
@@ -1027,6 +1069,8 @@ async function billingWebhook(request: Request, env: Env): Promise<Response> {
 
 /** KV: a workspace's checkout started in the last 15 minutes. */
 const CHECKOUT_PREFIX = "checkout:";
+/** KV: a workspace changed plan in the last hour (so the refund Creem sends for a downgrade isn't an alert). */
+const PLAN_CHANGE_PREFIX = "planchange:";
 
 /**
  * Which workspace a refund or dispute is about: from metadata on it or on what it's nested with (its
@@ -1043,12 +1087,13 @@ async function refundWorkspace(env: Env, object: Record<string, unknown> | undef
   return subId ? ((await directory(env).slugForSubscription(subId)) ?? undefined) : undefined;
 }
 
-async function applyBillingEvent(env: Env, update: NonNullable<ReturnType<typeof readEvent>>): Promise<Response> {
+/** `answer`: Creem's answer to a change we asked for, not an event (see Directory.applyBilling). */
+async function applyBillingEvent(env: Env, update: BillingUpdate, answer = false): Promise<Response> {
   const before = update.workspace ? await directory(env).billing(update.workspace) : null;
-  const applied = await directory(env).applyBilling(update, "creem");
+  const applied = await directory(env).applyBilling(update, "creem", answer);
   if (!applied) {
     // Someone paid for a workspace we can't find (deleted mid-checkout?): refund them.
-    if (update.plan === "team" && update.workspace) {
+    if (update.plan && update.plan !== "free" && update.workspace) {
       await ops(env, {
         kind: "billing_unknown_workspace",
         slug: update.workspace,
@@ -1060,12 +1105,26 @@ async function applyBillingEvent(env: Env, update: NonNullable<ReturnType<typeof
     return Response.json({ ok: true, ignored: true });
   }
   if (applied.replaced) {
+    // Two subscriptions for one workspace (two checkouts both paid, or subscribing again): the older one is
+    // canceled here so it never charges again. What it already charged is the operator's to refund.
+    const old = applied.replaced;
+    let canceled: "already" | "now" | "failed" = "already";
+    if (old.status !== "canceled") {
+      canceled = await cancelSubscription(env, old.subscriptionId).then(
+        () => "now" as const,
+        (err) => (console.error("canceling a replaced subscription failed", applied.slug, old.subscriptionId, err), "failed" as const),
+      );
+    }
     await ops(env, {
       kind: "billing_replaced",
       slug: applied.slug,
-      message: `${applied.slug} has a new subscription (${update.subscriptionId}) replacing ${applied.replaced}. Check the old one is canceled in Creem, or they pay twice.`,
-      detail: { eventId: update.eventId, subscriptionId: update.subscriptionId, replaced: applied.replaced },
-      alert: true,
+      message:
+        canceled === "failed"
+          ? `${applied.slug} has two subscriptions: it keeps ${old.by}, and canceling ${old.subscriptionId}, which it replaces, failed. Cancel that one in Creem, or they pay twice, and refund what it charged if they paid for both.`
+          : `${applied.slug} has two subscriptions: it keeps ${old.by}, and ${old.subscriptionId}, which it replaces, ${canceled === "now" ? "was canceled automatically" : "was already canceled"}. If they paid for both, refund the replaced one in Creem.`,
+      detail: { eventId: update.eventId, subscriptionId: old.by, replaced: old.subscriptionId, replacedStatus: old.status, canceled },
+      // Per replaced subscription: each one may be owed a refund, so a second within the hour is told too.
+      alert: `billing_replaced:${applied.slug}:${old.subscriptionId}`,
     }).catch(() => {});
   }
   // Two webhooks at once can finish in either order, so settle on what the record says now.
@@ -1080,13 +1139,23 @@ async function applyBillingEvent(env: Env, update: NonNullable<ReturnType<typeof
   // The plan is set; telling the operator mustn't make Creem retry (or raise a misleading "apply failed").
   try {
     const after = await directory(env).billing(applied.slug);
+    if (after && before && after.status === before.status && after.plan !== before.plan) {
+      await ops(env, {
+        kind: "billing",
+        slug: applied.slug,
+        message: `${applied.slug} moved from ${PLANS[before.plan].label} to ${PLANS[after.plan].label}${after.payerEmail ? ` (billed to ${after.payerEmail})` : ""}. Plan now: ${plan}.`,
+        detail: { eventId: update.eventId, subscriptionId: update.subscriptionId, status: after.status },
+        alert: `billing:${applied.slug}:plan:${after.plan}`,
+      });
+    }
     if (after && after.status !== before?.status) {
+      const label = PLANS[after.plan].label;
       const what: Record<string, string> = {
-        active: "subscribed to Team",
-        trialing: "started a Team trial",
-        past_due: "has a failed payment (Team kept while Creem retries)",
+        active: `subscribed to ${label}`,
+        trialing: `started a ${label} trial`,
+        past_due: `has a failed payment (${label} kept while Creem retries)`,
         unpaid: "has an unpaid subscription",
-        canceled: "canceled Team",
+        canceled: `canceled ${label}`,
         scheduled_cancel: "scheduled a cancel",
         paused: "paused its subscription",
         expired: "has an expired subscription",
@@ -1109,7 +1178,7 @@ async function applyBillingEvent(env: Env, update: NonNullable<ReturnType<typeof
  * Self-serve: make a Free workspace with this person as its admin, then send
  * them into it, signed in, at its settings (where the agent gets connected).
  */
-async function createOwnWorkspace(env: Env, email: string, input: { name: string; slug: string; terms: boolean }): Promise<{ location: string } | { error: string }> {
+async function createOwnWorkspace(env: Env, email: string, input: { name: string; slug: string; terms: boolean; plan?: PaidPlanId | null }): Promise<{ location: string } | { error: string }> {
   if (!input.name) return { error: "Give the workspace a name." };
   if (!validSlug(input.slug)) return { error: "Pick an address of 3-32 lowercase letters, digits and single hyphens, starting with a letter." };
   if (!input.terms) return { error: "Agree to the terms and privacy policy to continue." };
@@ -1130,7 +1199,8 @@ async function createOwnWorkspace(env: Env, email: string, input: { name: string
   }
   forgetWorkspaces();
   await ops(env, { kind: "signup", slug: input.slug, message: `${email} made “${input.name}” (${input.slug}) on Free.`, alert: `signup:${input.slug}` });
-  return { location: `${workspaceOrigin(env, input.slug)}/login?return=${encodeURIComponent("/settings")}` };
+  // A plan chosen on the pricing page comes along, so settings can point at its button.
+  return { location: `${workspaceOrigin(env, input.slug)}/login?return=${encodeURIComponent(input.plan ? `/settings?plan=${input.plan}` : "/settings")}` };
 }
 
 /**
@@ -1577,31 +1647,99 @@ async function settingsApi(request: Request, url: URL, env: Env, hub: HubApi, vi
       forgetWorkspaces();
       return Response.json({ location: `${apexOrigin(env)}/workspaces?deleted=${encodeURIComponent(name)}` });
     }
-    // Billing (admins): start paying for Team, or open the provider's portal to manage it.
+    // Billing (admins): start paying for Personal or Team, change between them, or open the provider's portal.
     if (path === "/api/settings/billing/checkout" && request.method === "POST") {
       if (!admin) return adminOnly();
+      const wanted = (await jsonBody(request)).plan;
+      if (!isPaidPlan(wanted)) return Response.json({ error: "plan must be personal or team" }, { status: 400 });
       const existing = await directory(env).billing(slug);
-      // Canceled with paid time left is still Team, but subscribing again is how to keep it (the new one takes over).
-      if ((await hub.plan()).id === "team" && existing?.status !== "canceled") return Response.json({ error: "This workspace is already on Team." }, { status: 400 });
+      const current = await hub.plan();
+      // Canceled with paid time left is still paid for, but subscribing again is how to keep it (the new one takes over).
+      if (current.id !== "free" && existing?.status !== "canceled") {
+        return Response.json({ error: `This workspace is already on ${current.label}.${current.id !== wanted && existing ? " Change its plan from Plan and billing instead." : ""}` }, { status: 400 });
+      }
+      const seats = personalBlocker(wanted, (await hub.members()).length);
+      if (seats) return Response.json({ error: seats }, { status: 409 });
       // A subscription that still exists would mean paying twice: put the plan right instead.
       if (existing && subscriptionLive(existing.status, existing.periodEnd)) {
-        const fix = planFor(existing.status, existing.periodEnd);
+        const fix = planFor(existing.plan, existing.status, existing.periodEnd);
         await hub.setPlan(fix.plan, fix.until);
         return Response.json({ error: existing.status === "paused" ? "This workspace's subscription is paused: resume it from Manage billing." : "This workspace already has a subscription; reload to see it." }, { status: 409 });
       }
       // Clicking Upgrade again soon after (the payment's webhook can lag) reopens the same checkout, which Creem
       // charges at most once, instead of starting a second one.
-      // (Only this admin's, for this workspace: not one a workspace deleted and made again at the address started.)
+      // (Only this admin's, for this workspace: not one a workspace deleted and made again at the address started.
+      // And only this plan's: choosing the other plan a minute later must not reopen the first one's checkout.)
       const created = (await directory(env).workspace(slug))?.createdAt ?? null;
-      const key = `${CHECKOUT_PREFIX}${slug}:${created ?? ""}:${email}`;
+      const key = `${CHECKOUT_PREFIX}${slug}:${created ?? ""}:${email}:${wanted}`;
       const recent = await env.OAUTH_KV.get(key).catch(() => null);
       if (recent) return Response.json({ url: recent });
       try {
-        const checkout = await startCheckout(env, { workspace: slug, created, email, successUrl: `${url.origin}/settings?billing=done` });
+        const checkout = await startCheckout(env, { workspace: slug, created, email, plan: wanted, successUrl: `${url.origin}/settings?billing=done` });
         await env.OAUTH_KV.put(key, checkout, { expirationTtl: 15 * 60 }).catch(() => {});
         return Response.json({ url: checkout });
       } catch (err) {
         if (err instanceof BillingError) return Response.json({ error: err.message }, { status: 503 });
+        throw err;
+      }
+    }
+    // Move a live subscription between Personal and Team, now. Whoever pays decides (it changes what they're
+    // charged); with no payer on record, any admin. Creem prorates: see changeSubscriptionPlan.
+    if (path === "/api/settings/billing/plan" && request.method === "POST") {
+      const record = await directory(env).billing(slug);
+      const payer = Boolean(record?.payerEmail && personKey(record.payerEmail) === personKey(email));
+      if (!admin && !payer) return adminOnly();
+      const wanted = (await jsonBody(request)).plan;
+      if (!isPaidPlan(wanted)) return Response.json({ error: "plan must be personal or team" }, { status: 400 });
+      if (record?.payerEmail && !payer) return Response.json({ error: `Billing is managed by ${record.payerEmail}, who paid for it. Ask them to change the plan.` }, { status: 403 });
+      if ((await hub.plan()).free) return Response.json({ error: "This workspace's plan is arranged with us: there's nothing to change here." }, { status: 400 });
+      // Only a subscription that is paid up changes plan: one that's canceled, paused or overdue is settled first.
+      if (!record?.subscriptionId || !["active", "trialing"].includes(record.status)) {
+        const why = !record?.subscriptionId
+          ? (await hub.plan()).id === "free"
+            ? "This workspace has no subscription: choose a plan to subscribe."
+            : "This workspace's plan is arranged with us: there's nothing to change here."
+          : record.status === "scheduled_cancel" || record.status === "canceled"
+            ? "This subscription is canceled. Resume it in Manage billing, or subscribe again once it ends, then change plan."
+            : record.status === "paused"
+              ? "This subscription is paused. Resume it in Manage billing first, then change plan."
+              : "The last payment didn't go through. Update the card in Manage billing first, then change plan.";
+        return Response.json({ error: why }, { status: 409 });
+      }
+      if (record.plan === wanted) return Response.json({ error: `This workspace is already on ${PLANS[wanted].label}.` }, { status: 400 });
+      const seats = personalBlocker(wanted, (await hub.members()).length);
+      if (seats) return Response.json({ error: seats }, { status: 409 });
+      const upgraded = PLAN_ORDER.indexOf(wanted) > PLAN_ORDER.indexOf(record.plan);
+      try {
+        const changed = await changeSubscriptionPlan(env, record.subscriptionId, wanted);
+        // Moving to a smaller plan refunds the unused part of the bigger one: that refund's event isn't news.
+        if (!upgraded) await env.OAUTH_KV.put(`${PLAN_CHANGE_PREFIX}${slug}`, wanted, { expirationTtl: 3600 }).catch(() => {});
+        // Apply what Creem answered, so the person sees the new plan on the page they return to (the webhook that
+        // follows then changes nothing). Its product and status decide, never what was asked: if the answer isn't
+        // this subscription, paid up, on the product asked for (a charge that didn't go through, say), nothing is
+        // applied here and Creem's events settle it.
+        const update = readEvent({ id: `change:${record.subscriptionId}:${Date.now()}`, eventType: "subscription.update", created_at: Date.now(), object: { ...(changed as object), items: null } }, productPlans(env));
+        const confirmed = Boolean(update && update.subscriptionId === record.subscriptionId && update.paid === wanted && ["active", "trialing"].includes(update.status));
+        if (update && confirmed) await applyBillingEvent(env, { ...update, workspace: slug, workspaceCreated: null }, true);
+        else {
+          await ops(env, {
+            kind: "billing_change_unconfirmed",
+            slug,
+            message: `${slug} asked to move to ${PLANS[wanted].label} and Creem accepted, but its answer doesn't show the subscription paid up on that product (status ${update?.status || "unread"}, product ${update?.productId ?? "none"}). Its plan follows Creem's events; check the subscription in Creem.`,
+            detail: { subscriptionId: record.subscriptionId },
+            alert: true,
+          });
+        }
+        return Response.json({ plan: (await hub.plan()).id, upgraded, confirmed });
+      } catch (err) {
+        if (err instanceof BillingError) {
+          // Creem refuses some subscriptions (one with a discount applied, say): a person sorts those out.
+          if (err.providerStatus && err.providerStatus < 500) {
+            await ops(env, { kind: "billing_change_refused", slug, message: `Creem refused moving ${slug} to ${PLANS[wanted].label} (HTTP ${err.providerStatus}). Change it in Creem's dashboard and tell them.`, detail: { subscriptionId: record.subscriptionId }, alert: true });
+            return Response.json({ error: "We couldn't change the plan automatically. We've been told and will sort it out; nothing was charged." }, { status: 409 });
+          }
+          return Response.json({ error: err.message }, { status: 503 });
+        }
         throw err;
       }
     }
@@ -2112,7 +2250,7 @@ async function operatorApi(request: Request, url: URL, env: Env, viewer: Viewer,
       return Response.json({ plan: rec.plan, until: rec.until });
     }
     if (action === "plan" && request.method === "POST") {
-      if (!isPlan(body.plan)) return Response.json({ error: "plan must be free or team" }, { status: 400 });
+      if (!isPlan(body.plan)) return Response.json({ error: "plan must be free, personal or team" }, { status: 400 });
       // A paying workspace's plan follows its subscription: the next webhook or resync would undo a hand-set one.
       if (body.force !== true && (await dir.billing(slug))) {
         return Response.json({ error: `${slug} has a subscription record, so its plan follows it. Use Resync plan or End billing, or send force: true.` }, { status: 409 });

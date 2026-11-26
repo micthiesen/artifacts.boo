@@ -83,6 +83,8 @@ export default Alchemy.Stack(
     const creemKey = yield* optional("CREEM_API_KEY");
     const creemSecret = yield* optional("CREEM_WEBHOOK_SECRET");
     const creemProduct = yield* optional("CREEM_PRODUCT_ID");
+    // The Personal plan's product. Unset: Personal isn't offered, and Team works as before.
+    const creemPersonalProduct = yield* optional("CREEM_PERSONAL_PRODUCT_ID");
     // Days a released fix waits for the person's answer before its support request resolves by itself (default 7).
     const autoResolveDays = yield* optional("SUPPORT_AUTO_RESOLVE_DAYS");
 
@@ -128,6 +130,7 @@ export default Alchemy.Stack(
         ...(creemKey ? { CREEM_API_KEY: Redacted.make(creemKey) } : {}),
         ...(creemSecret ? { CREEM_WEBHOOK_SECRET: Redacted.make(creemSecret) } : {}),
         ...(creemProduct ? { CREEM_PRODUCT_ID: creemProduct } : {}),
+        ...(creemPersonalProduct ? { CREEM_PERSONAL_PRODUCT_ID: creemPersonalProduct } : {}),
       },
     });
 

@@ -43,11 +43,54 @@ assistant's workflow are described in [SUPPORT.md](SUPPORT.md).
    record says.
 4. **Unread:** Creem sent a subscription event we couldn't parse (a payload
    change?). Look at the event in Creem's dashboard, fix `readEvent` in
-   `src/worker/billing.ts`, deploy, and resend the event from Creem (a
-   repeated event is safe).
-5. Bot Fight Mode can challenge webhooks: see [BILLING.md](BILLING.md).
-6. To set a plan by hand, use **Move to Team / Move to Free**. An event
-   from the workspace's subscription will set it again later.
+   `src/worker/billing.ts`, deploy, and resend the event from Creem.
+5. **Resending events from Creem's dashboard.** Creem's own retries keep
+   the event's id, and a repeated id only re-applies the stored record. A
+   manual resend is different: Creem gives it a new id and time around the
+   subscription as it was when the event was first made. The webhook
+   compares that subscription's `updated_at` with the one on record and
+   ignores a resend that is older, so resending an old event can't undo a
+   newer state, and an old payment of a subscription the workspace has
+   since replaced can't take over again. Two limits remain: a resend is
+   only recognised as old if Creem's payload carries `updated_at` (every
+   documented one does), and a subscription record written before
+   2026-11-26 has no `updated_at` until its next event. When in doubt,
+   resend only the newest event for a subscription, then check the
+   workspace's plan, or press **Resync plan**.
+6. **Unknown product** (`billing unknown product`): a subscription is on a
+   Creem product this deployment doesn't map to a plan, so it granted
+   nothing. Usually `CREEM_PRODUCT_ID` or `CREEM_PERSONAL_PRODUCT_ID` is
+   missing or from the other mode: fix `.env`, deploy, resend the event.
+7. Bot Fight Mode can challenge webhooks: see [BILLING.md](BILLING.md).
+8. To set a plan by hand for a workspace with no subscription, use the
+   operator API: `POST /api/admin/workspaces/<slug>/plan` with
+   `{"plan": "free" | "personal" | "team"}`. With a subscription record the
+   plan follows it (`force: true` overrides until its next event).
+
+## Plan changes and double payments
+
+- **Replaced** (`billing replaced`): a second subscription paid for a
+  workspace that already had one. The later one took over and the app
+  canceled the older one at Creem, so it won't charge again. Refund the
+  older one's last payment in Creem if the person paid for both. If the
+  alert says canceling failed, cancel it in Creem first.
+- **Change refused** (`billing change refused`): Creem wouldn't move a
+  subscription between Personal and Team (a discount on it, say). Nothing
+  was charged and the person was told we'd sort it out: change the product
+  in Creem's dashboard, or cancel and have them subscribe to the other
+  plan, and reply to them.
+- **Change unconfirmed** (`billing change unconfirmed`): Creem accepted a
+  plan change but its answer didn't show the subscription paid up on the
+  new product (a pro-rated charge that didn't go through). The workspace
+  keeps its plan until Creem's events say otherwise; look at the
+  subscription in Creem.
+- **Moved outside the app:** a product changed in Creem's dashboard is
+  followed. If that puts a workspace with several members on Personal,
+  they all stay and none can be added; the ops log has "moved from Team to
+  Personal". Decide with the customer whether that's what they meant.
+- **Refunds stay manual.** A plan change's own pro-rated refund is logged
+  as `billing proration refund` without an alert; every other refund or
+  dispute alerts, and changes no plan until you press **End billing**.
 
 ## Sign-in emails aren't arriving
 

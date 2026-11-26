@@ -23,7 +23,8 @@ links, OAuth consent, Web Push keys).
 | `OPERATOR_EMAILS` | Comma-separated emails that see the operator console at `/admin` |
 | `OPERATOR_TOKEN` | A random string; the operator API's bearer token for local scripts |
 | `PUSHOVER_TOKEN` | Optional: one Pushover application token shared by every user's Pushover channel |
-| `BILLING`, `CREEM_API_KEY`, `CREEM_WEBHOOK_SECRET`, `CREEM_PRODUCT_ID` | Optional: paid plans through Creem. Off unless `BILLING=on`; see docs/BILLING.md for turning it on |
+| `BILLING`, `CREEM_API_KEY`, `CREEM_WEBHOOK_SECRET`, `CREEM_PRODUCT_ID` | Optional: paid plans through Creem. Off unless `BILLING=on`; see docs/BILLING.md for turning it on. `CREEM_PRODUCT_ID` is the Team product |
+| `CREEM_PERSONAL_PRODUCT_ID` | Optional: the Personal product in Creem. Unset, Personal isn't offered anywhere (pricing page, settings, checkout) and Team works as before |
 | `SUPPORT_AUTO_RESOLVE_DAYS` | Optional: days a released fix waits for the person's answer before its support request resolves by itself. 7 unless set; see docs/SUPPORT.md |
 | `SELF_SERVE` | Optional: `on` lets anyone signed in make one Free workspace from "Your workspaces". Off unless set. Free workspaces are capped at 300 saved changes a day (each runs a render check), which bounds what one can cost |
 
@@ -63,7 +64,7 @@ the dashboard (Notifications → Add).
 
 - **Backups:** each workspace backs itself up to R2 between 10:00 and 12:00 UTC (spread by name) on days it changed, keeping up to 30 runs (7 on Free) and none older than 35 days except the newest, as a resumable job. A quiet workspace's alarm comes back when its oldest run expires (`backup_prune_at`), so deleted data leaves backups even when nothing changes; the directory does the same. The operator console starts a backup, or a restore (which backs up first and takes the workspace offline until it's loaded), and shows each job's progress.
 - **Off-Cloudflare copy:** `bun scripts/export.ts <slug|directory>` writes `exports/<slug>-<time>.json`; `bun scripts/import.ts <slug|directory> <file>` replaces that data with it (the workspace is offline while it loads).
-- **Plans:** workspaces are on Team (no artifact or member limits; 5 GB of content and 5,000 saves a day, sized to one Durable Object's 10 GB) unless the operator console moves them to Free; self-serve workspaces start on Free. Limits live in `src/worker/plans.ts`. Nothing is charged yet.
+- **Plans:** Free, Personal (one member, no artifact limit, 2 GB, 1,500 saves a day) and Team (no artifact or member limits; 5 GB of content and 5,000 saves a day, sized to one Durable Object's 10 GB). Operator-made workspaces are on Team; self-serve workspaces start on Free; a subscription moves a workspace to the plan its product pays for (docs/BILLING.md). The operator API sets a plan by hand (`POST /api/admin/workspaces/<slug>/plan {plan}`) for a workspace with no subscription. Limits live in `src/worker/plans.ts`.
 - **Fixing a workspace:** from `/admin`, add or replace its admins (say, a mistyped first admin) without a role inside it.
 - **Schema changes:** add a numbered migration (`src/worker/migrate.ts`); each workspace applies it the first time it wakes after the deploy. Migrations only go forward: once objects have migrated, older code refuses to run against them, so fix forward rather than rolling back.
 - **Demo workspace:** `bun scripts/seed-demo.ts` creates a `demo` workspace whose members are example people, publishes the examples in `demo/` as public artifacts with their starting votes and comments, and writes their links to `demo/links.json` for the splash page (commit it, then deploy). Run it again after changing an example; `--reseed` rewrites the shared state too.

@@ -4,7 +4,7 @@
 // Everything goes through /api/settings. A failed action only shows its notice,
 // so what you typed stays put; a successful one reloads and re-renders.
 
-import { PLANS } from "../worker/plans.ts";
+import { PAID_PLANS, PLANS, type PaidPlanId } from "../worker/plans.ts";
 
 type Settings = {
   workspace: { slug: string; name: string; url: string };
@@ -17,12 +17,12 @@ type Settings = {
   hosts: string[];
   /** Email domains whose people join as members when they first sign in. */
   joinDomains: string[];
-  /** Admins and the payer, while billing is on: the price, whether checkout works, and the subscription. */
+  /** Admins and the payer, while billing is on: each paid plan's price and whether it's sold here, and the subscription. */
   billing: {
-    ready: boolean;
-    price: { amount: number; currency: string; period: string };
-    /** `yours`: you pay for it; `payerMember`: the member who pays, if they still are one (as the server matches people). */
-    subscription: { status: string; periodEnd: string | null; manageable: boolean; payer: string | null; yours: boolean; payerMember: string | null } | null;
+    /** `offered`: the plan is sold here; `ready`: its checkout works now. */
+    plans: Record<PaidPlanId, { label: string; price: { amount: number; currency: string; period: string }; ready: boolean; offered: boolean }>;
+    /** `plan`: the plan it pays for; `yours`: you pay for it; `payerMember`: the member who pays, if they still are one (as the server matches people). */
+    subscription: { status: string; periodEnd: string | null; manageable: boolean; payer: string | null; yours: boolean; payerMember: string | null; plan: PaidPlanId } | null;
   } | null;
   /** You made this workspace yourself, so you can delete it. */
   canDelete: boolean;
@@ -31,7 +31,7 @@ type Settings = {
     label: string;
     limits: { artifacts: number | null; bytes: number | null; members: number | null; changesPerDay: number | null; emailsPerDay: number };
     usage: { artifacts: number; bytes: number; members: number };
-    /** A canceled subscription's Team lasts until then. */
+    /** A canceled subscription's plan lasts until then. */
     until?: string | null;
     /** Team given free by us, whatever billing says. */
     free?: boolean;
@@ -155,6 +155,9 @@ const FREE = PLANS.free.limits;
 /** What moving back to Free means, said where the customer decides. */
 const AFTER_FREE = `After that, this workspace keeps everything but can't add anything while it's over ${FREE.artifacts} artifacts, ${FREE.members} members or ${size(FREE.bytes!)} of storage.`;
 
+/** Statuses of a payment that hasn't gone through yet (the plan is kept for a while). */
+const FAILING = ["past_due", "unpaid", "expired", "incomplete"];
+
 /** Statuses after which a subscription can't charge again. */
 const ENDED = ["canceled", "expired", "scheduled_cancel"];
 
@@ -164,14 +167,32 @@ function seesBilling(): boolean {
   return sub?.payer ? sub.yours : data.you.role === "admin";
 }
 
-/** Admins, while billing is on: upgrade to Team, or manage the subscription with the payment provider. */
+const priced = (p: { amount: number; period: string }) => `$${p.amount} a ${p.period}`;
+
+/** What a paid plan gives, in a sentence, for someone deciding on Free. */
+function planPitch(id: PaidPlanId, price: { amount: number; period: string }): string {
+  const l = PLANS[id].limits;
+  const who = l.members === null ? "for the whole workspace" : l.members === 1 ? "for one member" : `for up to ${l.members} members`;
+  return `${PLANS[id].label} is ${priced(price)} ${who}: no artifact ${l.members === null ? "or member " : ""}limit, and ${size(l.bytes!)} of storage.`;
+}
+
+/** Why this workspace can't be on a plan as it is (Personal is one member), or null. Matches the server. */
+function seatsBlocker(id: PaidPlanId): string | null {
+  const max = PLANS[id].limits.members;
+  const n = data.plan.usage.members;
+  return max === null || n <= max ? null : `${PLANS[id].label} is for one person, and this workspace has ${n} members.`;
+}
+
+/** Admins, while billing is on: choose a paid plan, move between them, or manage the subscription with the payment provider. */
 function billingSection(billing: NonNullable<Settings["billing"]>): HTMLElement {
   const sub = billing.subscription;
-  const team = data.plan.id === "team";
+  const paid = data.plan.id !== "free";
+  const label = data.plan.label;
+  const offered = PAID_PLANS.filter((id) => billing.plans[id].offered);
   const until = sub?.periodEnd ? new Date(sub.periodEnd).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" }) : null;
-  const go = (path: string) =>
+  const go = (path: string, body: unknown = {}) =>
     act(async () => {
-      const r = await api<{ url: string }>(path, { body: {} });
+      const r = await api<{ url: string }>(path, { body });
       location.href = r.url;
       // We're leaving for the provider: don't refresh this page meanwhile (the browser would cancel it mid-way).
       await new Promise(() => {});
@@ -182,28 +203,46 @@ function billingSection(billing: NonNullable<Settings["billing"]>): HTMLElement 
   const mine = seesBilling();
   const state = data.plan.free
     ? `Team, free: arranged with us.${sub && !["canceled", "expired"].includes(sub.status) ? " It still has a subscription: cancel it in Manage billing if you don't need it." : ""}`
-    : !team
-    ? `This workspace is on Free. Team is $${billing.price.amount} a ${billing.price.period} for the whole workspace: no artifact or member limit, and more storage. Guests are always free.`
+    : !paid
+    ? `This workspace is on Free. ${offered.map((id) => planPitch(id, billing.plans[id].price)).join(" ")} Guests are always free.`
     : sub && ["active", "trialing", "paid"].includes(sub.status)
-      ? `Team, paid${until ? ` through ${until}` : ""}.`
-      : sub && ["past_due", "unpaid", "expired"].includes(sub.status)
-        ? `Team, but the last payment didn't go through. ${mine ? "Update the card in Manage billing" : `Ask ${payer} to update the card`}${plainUntil ? ` by ${plainUntil}` : ""} to keep it.`
+      ? `${label}, paid${until ? ` through ${until}` : ""}.`
+      : sub && FAILING.includes(sub.status)
+        ? `${label}, but the last payment didn't go through. ${mine ? "Update the card in Manage billing" : `Ask ${payer} to update the card`}${plainUntil ? ` by ${plainUntil}` : ""} to keep it.`
         : sub?.status === "paused"
-          ? `Team until ${plainUntil ?? until ?? "the end of the paid period"}, then Free: the subscription is paused. ${mine ? "Resume it from Manage billing" : `Ask ${payer} to resume it`} to keep Team. ${AFTER_FREE}`
+          ? `${label} until ${plainUntil ?? until ?? "the end of the paid period"}, then Free: the subscription is paused. ${mine ? "Resume it from Manage billing" : `Ask ${payer} to resume it`} to keep ${label}. ${AFTER_FREE}`
           : data.plan.until || sub?.status === "scheduled_cancel"
-            ? `Team until ${plainUntil ?? until ?? "the end of the paid period"}, then Free: the subscription is canceled. Subscribe again to keep Team. ${AFTER_FREE}`
-            : "Team, arranged with us directly.";
+            ? `${label} until ${plainUntil ?? until ?? "the end of the paid period"}, then Free: the subscription is canceled. Subscribe again to keep ${label}. ${AFTER_FREE}`
+            : `${label}, arranged with us directly.`;
   // Matches the server: a subscription that's canceled or lapsed to Free can be replaced by a new one.
-  const live = sub && sub.status !== "canceled" && team;
+  const live = sub && sub.status !== "canceled" && paid;
   const actions = h("div", { class: "row" });
   const notes: HTMLElement[] = [];
-  // Canceled with paid time left: subscribing again keeps Team past the date (the new subscription takes over).
-  const resubscribe = team && sub?.status === "canceled" && Boolean(data.plan.until);
-  if (((!team && !live) || resubscribe) && data.you.role === "admin") {
-    const b = btn(resubscribe ? "Subscribe again" : "Upgrade to Team", () => go("/api/settings/billing/checkout"));
-    if (!billing.ready || checkout !== "idle") {
-      b.setAttribute("disabled", "");
-      b.setAttribute("aria-describedby", "billing-not-ready");
+  // Canceled with paid time left: subscribing again keeps the plan past the date (the new subscription takes over).
+  const resubscribe = paid && sub?.status === "canceled" && Boolean(data.plan.until);
+  if (((!paid && !live) || resubscribe) && data.you.role === "admin") {
+    const choices = resubscribe ? [sub!.plan] : offered;
+    let unavailable = false;
+    choices.forEach((id, i) => {
+      const b = btn(
+        resubscribe ? "Subscribe again" : `Upgrade to ${billing.plans[id].label} (${priced(billing.plans[id].price)})`,
+        () => go("/api/settings/billing/checkout", { plan: id }),
+        i === 0 ? "button small" : "button small secondary",
+      );
+      b.dataset.plan = id;
+      const seats = seatsBlocker(id);
+      if (seats) {
+        b.setAttribute("disabled", "");
+        b.setAttribute("aria-describedby", `billing-seats-${id}`);
+        notes.push(h("p", { class: "muted small", id: `billing-seats-${id}` }, `${seats} Remove the others to choose it, or choose Team.`));
+      } else if (!billing.plans[id].ready || checkout !== "idle") {
+        b.setAttribute("disabled", "");
+        b.setAttribute("aria-describedby", "billing-not-ready");
+        unavailable = true;
+      }
+      actions.append(b);
+    });
+    if (unavailable || !choices.length) {
       notes.push(
         checkout === "pending"
           ? h("p", { class: "muted small", id: "billing-not-ready" }, "Waiting for the payment to be confirmed…")
@@ -212,7 +251,40 @@ function billingSection(billing: NonNullable<Settings["billing"]>): HTMLElement 
             : h("p", { class: "muted small", id: "billing-not-ready" }, "Upgrades are unavailable for now. ", h("a", { href: "/support" }, "Ask us"), " and we'll sort out an upgrade."),
       );
     }
-    actions.append(b);
+  }
+  // Moving a paid-up subscription to the other paid plan: whoever pays decides, and sees what it costs before the click.
+  if (sub && mine && paid && !data.plan.free && data.plan.id === sub.plan && ["active", "trialing"].includes(sub.status)) {
+    for (const id of offered.filter((p) => p !== sub.plan && billing.plans[p].ready)) {
+      const to = billing.plans[id];
+      const up = PAID_PLANS.indexOf(id) > PAID_PLANS.indexOf(sub.plan);
+      const seats = seatsBlocker(id);
+      if (seats) {
+        notes.push(h("p", { class: "muted small" }, `${to.label} (${priced(to.price)}) is for one person: this workspace can move to it once it has one member (it has ${data.plan.usage.members}).`));
+        continue;
+      }
+      const terms = up
+        ? `You're charged the difference for the rest of this period now, then ${priced(to.price)}.`
+        : `It takes effect now: the unused part of ${label} for this period is refunded to your card, then it's ${priced(to.price)}. ${to.label} allows ${PLANS[id].limits.members === 1 ? "one member and " : ""}${size(PLANS[id].limits.bytes!)} of storage; over that, this workspace keeps everything but can't add more.`;
+      const b = btn(
+        `Move to ${to.label}`,
+        async () => {
+          if (!window.confirm(`Move this workspace to ${to.label}? ${terms}`)) return;
+          b.setAttribute("aria-busy", "true");
+          await act(async () => {
+            const r = await api<{ plan: string; confirmed: boolean }>("/api/settings/billing/plan", { body: { plan: id } });
+            notice = r.confirmed
+              ? { tone: "ok", text: `This workspace is on ${to.label} now. ${up ? "The difference for the rest of this period was charged to your card." : `The unused part of ${label} is refunded to your card.`}` }
+              : { tone: "warn", text: `The payment provider hasn't confirmed the move to ${to.label} yet. If a charge didn't go through, update the card in Manage billing; this page shows the new plan once it's confirmed.` };
+          });
+          b.removeAttribute("aria-busy");
+        },
+        "button small secondary",
+      );
+      b.dataset.plan = id;
+      b.setAttribute("aria-describedby", `billing-move-${id}`);
+      notes.push(h("p", { class: "muted small", id: `billing-move-${id}` }, `${to.label} is ${priced(to.price)}. If you move to it: ${terms.charAt(0).toLowerCase()}${terms.slice(1)}`));
+      actions.append(b);
+    }
   }
   if (sub?.manageable && mine) {
     actions.append(btn("Manage billing", () => go("/api/settings/billing/portal"), "button small secondary"));
@@ -224,7 +296,7 @@ function billingSection(billing: NonNullable<Settings["billing"]>): HTMLElement 
         ? h("p", { class: "muted small" }, `Billed to you (${payer}).`)
         : !sub?.payerMember
           ? h("p", { class: "muted small" }, `Billed to ${payer}, who is no longer a member. `, h("a", { href: "/support" }, "Ask us"), " to move billing to you.")
-          : h("p", { class: "muted small" }, `Billed to ${payer}: they can change the card or cancel.`),
+          : h("p", { class: "muted small" }, `Billed to ${payer}: they can change the plan or the card, or cancel.`),
     );
   }
   return h(
@@ -367,12 +439,12 @@ function exportSection(): HTMLElement {
 // without re-rendering, so what you type and the notice stay put. If it never comes, Upgrade stays off until reload.
 let checkout: "idle" | "pending" | "stuck" = "idle";
 if (new URLSearchParams(location.search).get("billing") === "done") {
-  notice = { tone: "ok", text: "Thanks! Your workspace moves to Team as soon as the payment is confirmed, usually within a few seconds." };
+  notice = { tone: "ok", text: "Thanks! Your workspace moves to its new plan as soon as the payment is confirmed, usually within a few seconds." };
   history.replaceState(null, "", location.pathname + location.hash);
   checkout = "pending";
   let tries = 0;
   // Only the plan counts: an earlier subscription's record is already there on a resubscribe.
-  const confirmed = (s: Settings) => s.plan.id === "team" && !(s.billing?.subscription?.status === "canceled" && s.plan.until);
+  const confirmed = (s: Settings) => s.plan.id !== "free" && !(s.billing?.subscription?.status === "canceled" && s.plan.until);
   const check = async () => {
     tries++;
     let fresh: Settings | null = null;
@@ -384,7 +456,7 @@ if (new URLSearchParams(location.search).get("billing") === "done") {
     if (fresh && confirmed(fresh)) {
       checkout = "idle";
       data = fresh;
-      notice = { tone: "ok", text: "Payment confirmed: this workspace is on Team." };
+      notice = { tone: "ok", text: `Payment confirmed: this workspace is on ${fresh.plan.label}.` };
       render({ keepTyped: true });
     } else if (tries < 20) {
       if (fresh && data && (fresh.plan.id !== data.plan.id || fresh.plan.until !== data.plan.until)) {
@@ -401,6 +473,9 @@ if (new URLSearchParams(location.search).get("billing") === "done") {
   };
   setTimeout(check, 3000);
 }
+
+// From the pricing page (Get Personal, Get Team): the first render points at that plan's button.
+let wantedPlan = new URLSearchParams(location.search).get("plan");
 
 async function load() {
   data = await api<Settings>("/api/settings");
@@ -490,10 +565,11 @@ function render(opts: { keepTyped?: boolean } = {}) {
     // Close to a limit, admins get a way to more room before they hit it.
     const near = [
       limits.artifacts !== null && usage.artifacts >= limits.artifacts * 0.8,
-      limits.members !== null && usage.members >= limits.members,
+      // One member is what Personal is, not a workspace running out of room.
+      limits.members !== null && limits.members > 1 && usage.members >= limits.members,
       limits.bytes !== null && usage.bytes >= limits.bytes * 0.8,
     ].some(Boolean);
-    if (near && data.billing && data.plan.id === "free") usageLine.append(" ", h("a", { href: "#plan-and-billing" }, "Upgrade to Team for more room"));
+    if (near && admin && data.billing && data.plan.id !== "team") usageLine.append(" ", h("a", { href: "#plan-and-billing" }, data.plan.id === "free" ? "Upgrade for more room" : "Move to Team for more room"));
     else if (near && !admin) usageLine.append(" For more room, ask a workspace admin to upgrade, or delete artifacts you don't need.");
     sections.push(usageLine);
     // On Free, the way to more room comes first.
@@ -508,7 +584,7 @@ function render(opts: { keepTyped?: boolean } = {}) {
       // Part of the page, not news: no alert role, or it would be announced on every re-render.
       const overNotice = noticeNode({
         tone: "warn",
-        text: `This workspace is over the ${data.plan.label} plan's limit for ${over.join(" and ")}. Everything here still opens and can be changed, but nothing that adds to it (new artifacts, members or stored content) until it's back under${data.billing ? ", or the workspace moves to Team" : ""}. Archiving doesn't free room; deleting does.`,
+        text: `This workspace is over the ${data.plan.label} plan's limit for ${over.join(" and ")}. Everything here still opens and can be changed, but nothing that adds to it (new artifacts, members or stored content) until it's back under${data.billing ? ", or the workspace moves to a bigger plan" : ""}. Archiving doesn't free room; deleting does.`,
       });
       overNotice.removeAttribute("role");
       sections.push(overNotice);
@@ -712,6 +788,13 @@ function render(opts: { keepTyped?: boolean } = {}) {
   }
   if (notice) main.querySelector(".notice")?.scrollIntoView({ block: "nearest", behavior: "smooth" });
   notice = null;
+  if (wantedPlan) {
+    const choice = [...main.querySelectorAll<HTMLButtonElement>("button[data-plan]")].find((b) => b.dataset.plan === wantedPlan);
+    wantedPlan = null;
+    history.replaceState(null, "", location.pathname + location.hash);
+    (choice ?? document.getElementById("plan-and-billing"))?.scrollIntoView({ block: "center" });
+    choice?.focus({ preventScroll: true });
+  }
 }
 
 /** Adds someone or changes their role; the server says which it was and whether it emailed them. */
